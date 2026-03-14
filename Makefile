@@ -68,7 +68,9 @@ CFLAGS = -nostdlib -fno-builtin -mcmodel=medany \
 SRCS = \
     kernel/boot/entry.S \
     kernel/driver/uart.c \
-    kernel/boot/main.c
+    kernel/boot/main.c \
+	kernel/driver/console.c
+
 #   ^ Lab1 基础文件，后续实验在此追加
 
 KERNEL  = kernel.elf

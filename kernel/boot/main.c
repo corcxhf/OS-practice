@@ -21,18 +21,17 @@
 
 /* 声明在 uart.c 中实现的函数（Lab2完成后改用 defs.h 统一管理）*/
 extern void uart_puts(char *s);
+extern void printf(char *fmt, ...);
+extern void clear_screen();
 
-/* ================================================================
- * TODO [Lab1-任务4]：
- *   实现 start_main() 函数：
- *   1. 调用 uart_puts() 打印 "Hello OS from RISC-V Bare-metal!\n"
- *   2. 然后进入 while(1) 死循环（内核永远不应该"退出"）
- *
- *   验收标准：运行 `make run` 后，终端出现上述字符串输出。
- * ================================================================ */
-void start_main() {
-  /* 在这里写你的代码 */
-
+void start_main()
+{
+  clear_screen(); // 验收：屏幕瞬间变干净！
+  printf("Welcome to WHU OS Lab!\n");
+  // 验收：这三个特殊的占位符必须被正确解析和打印！
+  printf("Kernel loaded at address: %p\n", 0x80000000);
+  printf("Signed integer test: %d\n", -123);
+  printf("String test: %s\n", "Hello, Variadic Parameters!");
   while (1)
-    ; /* 内核死循环，不要删除 */
+    ;
 }
