@@ -8,6 +8,7 @@ SECTIONS
   .text : {
     *(.text.entry)
     *(.text .text.*)
+    etext = .;
   }
 
   . = ALIGN(0x1000);

@@ -16,7 +16,8 @@
 #include "types.h"
 
 /* 链表节点结构 —— 注意：它"住"在空闲物理页面的最前面 8 字节 */
-struct free_node {
+struct free_node
+{
   struct free_node *next;
 };
 
@@ -38,7 +39,13 @@ extern char end_address[];
  *   - PHYSTOP 在 memlayout.h 中定义，是物理内存的上限
  *   - 每次循环，p 指针前进 PGSIZE（4096）字节
  * ================================================================ */
-void kinit(void) {
+void kinit(void)
+{
+
+  char *p;
+  for (p = (char *)PGROUNDDOWN((uint64)end_address); p + PGSIZE <= (char *)PHYSTOP; p += PGSIZE)
+    kfree(p);
+
   /* ================================================================
    * TODO [Lab3-任务1-步骤1]：
    *   将从 end_address 到 PHYSTOP 的全部内存页释放到 free_mem_list。
@@ -60,12 +67,12 @@ void kinit(void) {
  * 调试技巧：可先用 memset 把页面填充为 0xAB（垃圾值），
  *           如果内核意外读取到 0xAB 开头的数据，说明用了未初始化的内存。
  * ================================================================ */
-void kfree(void *pa) {
-  struct free_node *r;
-
+void kfree(void *pa)
+{
   /* 安全检查（已提供，无需修改）*/
   if (((uint64)pa % PGSIZE) != 0 || (char *)pa < end_address ||
-      (uint64)pa >= PHYSTOP) {
+      (uint64)pa >= PHYSTOP)
+  {
     panic("kfree: invalid address");
   }
 
@@ -77,6 +84,9 @@ void kfree(void *pa) {
    *   实现头插法，将 pa 插入 free_mem_list 链表头。
    *   将 pa 强转为 struct free_node*，使其 next 指向原链表头，再更新链表头。
    * ================================================================ */
+  struct free_node *tem = pa;
+  tem->next = free_mem_list;
+  free_mem_list = (struct free_node *)pa;
 }
 
 /* ================================================================
@@ -89,8 +99,13 @@ void kfree(void *pa) {
  *   2. 若 r 不为空，将 free_mem_list 更新为 r->next（摘除链表头）
  *   3. 将页面内容清零（安全起见），然后返回 r
  * ================================================================ */
-void *kalloc(void) {
-  struct free_node *r;
+void *kalloc(void)
+{
+  if (free_mem_list == 0)
+    return 0;
+
+  void *res = free_mem_list;
+  free_mem_list = free_mem_list->next;
 
   /* ================================================================
    * TODO [Lab3-任务1-步骤3]：
@@ -99,5 +114,5 @@ void *kalloc(void) {
    *   分配成功后建议将页面内容清零，防止信息泄漏。
    * ================================================================ */
 
-  return 0; /* 删除这行，替换为上面的逻辑 */
+  return res; /* 删除这行，替换为上面的逻辑 */
 }

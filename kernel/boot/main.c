@@ -23,15 +23,18 @@
 extern void uart_puts(char *s);
 extern void printf(char *fmt, ...);
 extern void clear_screen();
+extern void kinit();
+extern void kvmininit();
+extern void kvminithart();
 
 void start_main()
 {
-  clear_screen(); // 验收：屏幕瞬间变干净！
-  printf("Welcome to WHU OS Lab!\n");
-  // 验收：这三个特殊的占位符必须被正确解析和打印！
-  printf("Kernel loaded at address: %p\n", 0x80000000);
-  printf("Signed integer test: %d\n", -123);
-  printf("String test: %s\n", "Hello, Variadic Parameters!");
+
+  kinit();     // 1. 必须第一步：建立 free_mem_list，此后才能 kalloc
+  kvmininit(); // 2. 建立内核页表（内部会 kalloc 页表页）
+  // kvminithart(); // 3. 写 satp，开启 MMU
+  // clear_screen();
+  printf("Memory initialized. Paging enabled!\n");
   while (1)
     ;
 }

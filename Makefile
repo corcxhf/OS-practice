@@ -69,7 +69,9 @@ SRCS = \
     kernel/boot/entry.S \
     kernel/driver/uart.c \
     kernel/boot/main.c \
-	kernel/driver/console.c
+	kernel/driver/console.c \
+	kernel/mm/kalloc.c \
+	kernel/mm/vm.c \
 
 #   ^ Lab1 基础文件，后续实验在此追加
 

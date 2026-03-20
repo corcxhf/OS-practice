@@ -39,23 +39,29 @@ extern char end_address[]; /* 内核数据段结束地址 */
  *   每级用 PX(level, va) 提取 9 位索引，乘以8字节，找到对应 PTE。
  *   PTE 中取出物理页号（PPN），转为物理地址（下一级页表基地址）。
  * ================================================================ */
-pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
+pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
+{
   if (va >= MAXVA)
     panic("walk: virtual address out of range");
 
   /* 从 level-2 到 level-1，共遍历两层（最后 level-0 由调用者处理）*/
-  for (int level = 2; level > 0; level--) {
+  for (int level = 2; level > 0; level--)
+  {
     /* 取当前层的 PTE 指针 */
     pte_t *pte = &pagetable[PX(level, va)];
 
-    if (*pte & PTE_V) {
+    if (*pte & PTE_V)
+    {
+      pagetable = (pagetable_t)PTE2PA((uint64)*pte);
       /* 该 PTE 有效：提取下一级页表的物理地址 */
       /* ================================================================
        * TODO [Lab3-任务2-步骤1]：
        *   从 *pte 中提取物理页号，转为下一级页表的物理基地址。
        *   使用 riscv.h 中的 PTE2PA 宏完成转换，并更新 pagetable 指针。
        * ================================================================ */
-    } else {
+    }
+    else
+    {
       /* 该 PTE 无效：中间级页表不存在 */
       if (!alloc)
         return 0; /* 不允许分配，返回失败 */
@@ -65,6 +71,8 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
       if (pagetable == 0)
         return 0; /* 内存耗尽 */
 
+      for (char *p = (char *)pagetable; p < (char *)pagetable + PGSIZE; p++)
+        *p = 0;
       /* 新页表必须清零！否则随机数据会被当成有效 PTE */
       /* ================================================================
        * TODO [Lab3-任务2-步骤2]：
@@ -73,6 +81,8 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
        *   不清零会导致随机数据被当成有效PTE！
        * ================================================================ */
 
+      *pte = PA2PTE(pagetable);
+      *pte |= PTE_V;
       /* ================================================================
        * TODO [Lab3-任务2-步骤3]：
        *   将新页表的物理地址写入当前 PTE，并设置 PTE_V（有效位）。
@@ -98,7 +108,8 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc) {
  * 返回值：0 表示成功，-1 表示失败（内存不足）
  * ================================================================ */
 int mappages(pagetable_t pagetable, uint64 pa, uint64 va, uint64 size,
-             int perm) {
+             int perm)
+{
   uint64 a, last;
   pte_t *pte;
 
@@ -108,7 +119,8 @@ int mappages(pagetable_t pagetable, uint64 pa, uint64 va, uint64 size,
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
 
-  for (;;) {
+  for (;;)
+  {
     /* 找到 va=a 对应的 level-0 PTE（必要时分配中间页表）*/
     if ((pte = walk(pagetable, a, 1)) == 0)
       return -1;
@@ -122,6 +134,7 @@ int mappages(pagetable_t pagetable, uint64 pa, uint64 va, uint64 size,
      *   将物理地址 pa 和权限 perm 以及有效位 PTE_V 写入 *pte。
      *   PTE格式：高位为PPN（PA2PTE得到），低位为权限位（perm | PTE_V）。
      * ================================================================ */
+    *pte = PA2PTE(pa) | (perm | PTE_V);
 
     if (a == last)
       break;
@@ -143,7 +156,8 @@ int mappages(pagetable_t pagetable, uint64 pa, uint64 va, uint64 size,
  *
  * 注：更完整的版本还需映射 PLIC、virtio 等设备（Lab7使用）。
  * ================================================================ */
-void kvmininit(void) {
+void kvmininit(void)
+{
   /* 分配根页表 */
   kernel_pagetable = (pagetable_t)kalloc();
   if (kernel_pagetable == 0)
@@ -158,18 +172,19 @@ void kvmininit(void) {
    *   映射 UART0 串口设备（MMIO区域），使内核可以访问串口寄存器。
    *   地址：UART0（见 memlayout.h），大小：PGSIZE，权限：可读+可写。
    * ================================================================ */
-
+  mappages(kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
   /* ================================================================
    * TODO [Lab3-任务4-步骤2]：
    *   映射内核代码段：从 KERNBASE 到 etext。
    *   权限：可读+可执行（注意：代码段不能有写权限！）。
    * ================================================================ */
-
+  mappages(kernel_pagetable, KERNBASE, KERNBASE, PGROUNDUP((uint64)etext) - KERNBASE, PTE_R | PTE_X);
   /* ================================================================
    * TODO [Lab3-任务4-步骤3]：
    *   映射内核数据段和剩余可用物理内存：从 etext 到 PHYSTOP。
    *   权限：可读+可写（数据段需要写权限，但不能有可执行权限）。
    * ================================================================ */
+  mappages(kernel_pagetable, PGROUNDUP((uint64)etext), PGROUNDUP((uint64)etext), (uint64)PHYSTOP - PGROUNDUP((uint64)etext), PTE_R | PTE_W);
 }
 
 /* ================================================================
@@ -182,7 +197,11 @@ void kvmininit(void) {
  *       如果 kvmininit 的映射写错了，下一条指令就会产生 Page Fault，
  *       导致系统崩溃（此时无任何错误提示，GDB 单步调试是唯一出路）。
  * ================================================================ */
-void kvminithart(void) {
+void kvminithart(void)
+{
+  w_satp(MAKE_SATP(kernel_pagetable));
+
+  sfence_vma();
   /* ================================================================
    * TODO [Lab3-任务4-步骤4]：
    *   1. 将根页表地址写入 satp 寄存器（开启Sv39分页）。
