@@ -6,10 +6,19 @@
 
 /* 时钟中断处理代码的入口（汇编实现），在 M-Mode 触发时调用 */
 extern char timervec[];
+extern void plicinithart(void);
 
 extern void start_main(void);
 /* 每个 CPU 核心的临时存储区，timervec 汇编代码需要用到 */
 uint64 timer_scratch[NCPU][5];
+
+void plicinit(void)
+{
+  // 1. 设置 UART0 的中断优先级为 1（默认是 0，表示关闭）
+  // PLIC_PRIORITY 寄存器数组，每个设备占 4 个字节
+  *(uint32 *)(PLIC + UART0_IRQ * 4) = 1;
+  *(uint8 *)(UART0 + 1) = 1;
+}
 
 /* ================================================================
  * timerinit — 配置 CLINT 硬件定时器，使其定期产生 M-Mode 时钟中断
@@ -28,64 +37,14 @@ void timerinit(void)
   /* 设置每次时钟中断的间隔：约 0.1 秒（具体时间取决于 QEMU 的时钟频率）*/
   int interval = 1000000;
   *(uint64 *)CLINT_MTIMECMP(hartid) = *(uint64 *)CLINT_MTIME + interval;
-  /* ================================================================
-   * TODO [Lab4-任务4-步骤1]：安排第一次时钟中断触发时刻
-   *
-   * 目标：向 CLINT 硬件的 mtimecmp 寄存器写入"当前时间 + 间隔"，
-   *   使定时器在 interval 时钟周期后首次产生 M-Mode 时钟中断。
-   *
-   * 完成前请先思考以下问题：
-   *   - CLINT_MTIME 和 CLINT_MTIMECMP(hartid) 是什么类型的地址？
-   *     （见 kernel/include/memlayout.h）
-   *   - 为什么要用 (uint64*) 指针解引用来读写，而不是普通变量赋值？
-   *   - 为什么每个 CPU 核心（hartid）需要独立的 mtimecmp？
-   * ================================================================ */
-
-  /* 初始化 timer_scratch 暂存区（此段代码已提供，无需修改）
-   * timervec 汇编在 M-Mode 处理时，通过 mscratch 找到此数组：
-   *   scratch[3] = CLINT_MTIMECMP(hartid) 的地址
-   *   scratch[4] = 时钟间隔值
-   * timervec 用这两个值来安排下一次中断时刻（mtimecmp += interval）*/
   uint64 *scratch = &timer_scratch[hartid][0];
   scratch[3] = CLINT_MTIMECMP(hartid);
   scratch[4] = interval;
   w_mscratch((uint64)scratch);
-
-  /* ================================================================
-   * TODO [Lab4-任务4-步骤2]：注册 M-Mode 时钟中断的汇编处理入口
-   *
-   * 目标：将 timervec（M-Mode 专用汇编处理程序）的地址写入
-   *   M-Mode 陷阱向量寄存器，使时钟中断到来时直接跳转到 timervec。
-   *
-   * 完成前请先思考：
-   *   - M-Mode 的陷阱向量用哪个 CSR 寄存器？是 mtvec 还是 stvec？
-   *     （查看 kernel/include/riscv.h 中的 w_mtvec）
-   *   - timervec 已在文件顶部声明，如何将标签地址转为 uint64？
-   * ================================================================ */
   w_mtvec((uint64)timervec);
 
-  /* ================================================================
-   * TODO [Lab4-任务4-步骤3]：使能 M-Mode 时钟中断
-   *
-   * 目标：打开 mie 寄存器的 MTIE 位，允许 M-Mode 接收 CLINT 时钟中断。
-   *
-   * 完成前请先思考：
-   *   - 若不设置 MTIE，即使 mtimecmp 到达，CPU 会有何反应？
-   *   - 为何必须使用"读-改-写"模式（r_mie() | MIE_MTIE），不能直接赋值？
-   *     （MIE_MTIE 常量见 kernel/include/riscv.h）
-   * ================================================================ */
   w_mie(r_mie() | MIE_MTIE);
-
-  // w_mstatus(r_mstatus() | MSTATUS_MIE);
-  /* ================================================================
-   * TODO [Lab4-任务4-步骤4]：开启 M-Mode 全局中断总开关
-   *
-   * 目标：打开 mstatus 寄存器的 MIE 位，这是 M-Mode 接收一切中断的总开关。
-   *
-   * 完成前请先思考：
-   *   - mstatus.MIE 与 mie.MTIE 是什么关系？两者都需要设置吗？
-   *   - MSTATUS_MIE 常量在 riscv.h 中对应哪个 bit？
-   * ================================================================ */
+  
 }
 
 /* ================================================================
@@ -109,8 +68,8 @@ void start(void)
   /* 设置 mepc 为 start_main 的地址，mret 执行后 PC 会跳到这里 */
   w_mepc((uint64)start_main);
 
-  // asm volatile("csrw pmpaddr0, %0" : : "r"(0x3fffffffffffffull));
-  // asm volatile("csrw pmpcfg0, %0" : : "r"(0xf));
+  asm volatile("csrw pmpaddr0, %0" : : "r"(0x3fffffffffffffull));
+  asm volatile("csrw pmpcfg0, %0" : : "r"(0xf));
 
   /* 将所有中断和异常委托给 S-Mode 处理（不需要 M-Mode 转手）*/
   w_medeleg(0xffff); /* 委托所有同步异常 */

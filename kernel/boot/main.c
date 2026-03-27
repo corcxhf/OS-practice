@@ -28,6 +28,7 @@ extern void kvmininit();
 extern void kvminithart();
 extern void start();
 extern void trapinithart();
+extern void plicinithart();
 
 void start_main()
 {
@@ -38,6 +39,7 @@ void start_main()
   clear_screen();
   printf("Memory initialized. Paging enabled!\n");
   trapinithart();
+
   // start();
   // printf("BACK\n");
 

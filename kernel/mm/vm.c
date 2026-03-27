@@ -172,6 +172,8 @@ void kvmininit(void)
    *   映射 UART0 串口设备（MMIO区域），使内核可以访问串口寄存器。
    *   地址：UART0（见 memlayout.h），大小：PGSIZE，权限：可读+可写。
    * ================================================================ */
+
+  mappages(kernel_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   mappages(kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
   /* ================================================================
    * TODO [Lab3-任务4-步骤2]：
@@ -187,16 +189,6 @@ void kvmininit(void)
   mappages(kernel_pagetable, PGROUNDUP((uint64)etext), PGROUNDUP((uint64)etext), (uint64)PHYSTOP - PGROUNDUP((uint64)etext), PTE_R | PTE_W);
 }
 
-/* ================================================================
- * kvminithart — 开启当前 CPU 核心的 MMU 分页
- *
- * 将 kernel_pagetable 写入 satp 寄存器，告诉 MMU：
- *   "从现在起，所有地址访问都要经过你查页表翻译！"
- *
- * 注意：执行完这条指令后，CPU 立即开始查页表。
- *       如果 kvmininit 的映射写错了，下一条指令就会产生 Page Fault，
- *       导致系统崩溃（此时无任何错误提示，GDB 单步调试是唯一出路）。
- * ================================================================ */
 void kvminithart(void)
 {
   w_satp(MAKE_SATP(kernel_pagetable));

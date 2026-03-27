@@ -16,7 +16,8 @@
 
 /* 声明 sys_trap_vector 汇编入口（在 kernelvec.S 中定义）*/
 extern char sys_trap_vector[];
-
+extern void plicinit(void);
+extern void plicinithart(void);
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
  *
@@ -26,19 +27,10 @@ extern char sys_trap_vector[];
 void trapinithart(void)
 {
   w_stvec((uint64)sys_trap_vector);
+  plicinit();
+  plicinithart();
+
   w_sstatus(r_sstatus() | SSTATUS_SIE);
-  /* ================================================================
-   * TODO [Lab4-任务1]：注册 S-Mode 陷阱向量入口
-   *
-   * 目标：告诉 CPU，当 S-Mode 下发生中断或异常时，应跳转到哪个地址开始处理。
-   *
-   * 你需要回答以下问题后，再着手实现：
-   *   1. 哪个 CSR 寄存器存放 S-Mode 陷阱处理入口地址？
-   *      （提示：查阅 kernel/include/riscv.h 中以 w_s 开头的写函数）
-   *   2. sys_trap_vector 是汇编中定义的一个地址标签，已在本文件顶部声明为
-   *      extern char sys_trap_vector[]。如何从 C 中取得它的地址并转换为 uint64？
-   *   3. 陷阱向量寄存器有「直接模式」和「向量模式」两种，本框架使用哪种？
-   * ================================================================ */
 }
 
 /* ================================================================
@@ -81,27 +73,35 @@ void sys_trap_handler(void)
       ticks++;
       if (ticks % 10 == 0)
         printf("Tick!\n");
-      /* ================================================================
-       * TODO [Lab4-任务3-步骤1]：处理时钟软件中断（scause irq=1）
-       *
-       * 背景：M-Mode 的 timervec 汇编代码在处理硬件时钟中断后，
-       *   通过向 sip 寄存器的 SSIP 位写 1，向 S-Mode 注入一个软件中断信号。
-       *   本 case 分支就是响应该信号的地方。
-       *
-       * 你的任务（不给实现，只给目标）：
-       *   1. 清除中断待处理标志：sip 寄存器的哪一位对应软件中断 pending？
-       *      若不清除，会发生什么情况？
-       *      参考：kernel/include/riscv.h 中的 r_sip() 和 w_sip()
-       *   2. 统计时钟中断次数（ticks），并以适当频率打印心跳信息。
-       *      思考：为什么不应每次中断都打印？应如何控制打印频率？
-       *   3. （Lab5 完成后追加）：若当前有正在运行的进程，调用 yield() 让出 CPU。
-       * ================================================================ */
       break;
 
     case 9:
-      /* 外部中断（如 UART 键盘）：Lab7 之前可暂不处理 */
-      break;
+    {
 
+      int hartid = r_tp();
+      int irq = *(uint32 *)PLIC_SCLAIM(hartid); // 读 SCLAIM 寄存器获取设备号
+
+      if (irq == UART0_IRQ)
+      {
+
+        while ((*(uint8 *)(UART0 + 5) & 1) != 0) // 读取 LSR 寄存器判断是否有数据
+        {
+          char c = *(uint8 *)(UART0 + 0); // 读取 RHR 寄存器拿到字符
+          *(uint8 *)(UART0 + 0) = c; // 写入 THR 寄存器回显
+        }
+      }
+      else if (irq != 0)
+      {
+        printf("Unexpected interrupt irq=%d\n", irq);
+      }
+
+      /* 3. Complete：通知 PLIC 该设备处理完毕 */
+      if (irq != 0)
+      {
+        *(uint32 *)PLIC_SCLAIM(hartid) = irq; // 将刚刚的设备号写回 SCLAIM
+      }
+      break;
+    }
     default:
       printf("sys_trap_handler: unknown interrupt irq=%ld\n", irq);
       break;
