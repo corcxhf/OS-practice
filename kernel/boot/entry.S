@@ -8,7 +8,7 @@ _entry:
 
     add      sp, sp, a0
 
-    call     start_main
+    call     start
 
 spin:
     j        spin

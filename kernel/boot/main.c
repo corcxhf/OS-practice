@@ -26,15 +26,21 @@ extern void clear_screen();
 extern void kinit();
 extern void kvmininit();
 extern void kvminithart();
+extern void start();
+extern void trapinithart();
 
 void start_main()
 {
 
-  kinit();     // 1. 必须第一步：建立 free_mem_list，此后才能 kalloc
-  kvmininit(); // 2. 建立内核页表（内部会 kalloc 页表页）
-  // kvminithart(); // 3. 写 satp，开启 MMU
-  // clear_screen();
+  kinit();       // 1. 必须第一步：建立 free_mem_list，此后才能 kalloc
+  kvmininit();   // 2. 建立内核页表（内部会 kalloc 页表页）
+  kvminithart(); // 3. 写 satp，开启 MMU
+  clear_screen();
   printf("Memory initialized. Paging enabled!\n");
+  trapinithart();
+  // start();
+  // printf("BACK\n");
+
   while (1)
     ;
 }

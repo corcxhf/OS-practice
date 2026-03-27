@@ -36,17 +36,20 @@
 #define MSTATUS_MPP_U (0L << 11)    /* MPP=00 表示上一特权级是User */
 #define MSTATUS_MIE (1L << 3)       /* Machine全局中断使能位 */
 
-static inline uint64 r_mstatus() {
+static inline uint64 r_mstatus()
+{
   uint64 x;
   asm volatile("csrr %0, mstatus" : "=r"(x));
   return x;
 }
-static inline void w_mstatus(uint64 x) {
+static inline void w_mstatus(uint64 x)
+{
   asm volatile("csrw mstatus, %0" : : "r"(x));
 }
 
 /* 机器态异常程序计数器 mepc：记录从M-Mode返回后应跳往的地址 */
-static inline void w_mepc(uint64 x) {
+static inline void w_mepc(uint64 x)
+{
   asm volatile("csrw mepc, %0" : : "r"(x));
 }
 
@@ -57,17 +60,20 @@ static inline void w_mepc(uint64 x) {
 #define SSTATUS_SIE (1L << 1) /* S态全局中断使能位（当前是否允许中断）*/
 #define SSTATUS_UIE (1L << 0)
 
-static inline uint64 r_sstatus() {
+static inline uint64 r_sstatus()
+{
   uint64 x;
   asm volatile("csrr %0, sstatus" : "=r"(x));
   return x;
 }
-static inline void w_sstatus(uint64 x) {
+static inline void w_sstatus(uint64 x)
+{
   asm volatile("csrw sstatus, %0" : : "r"(x));
 }
 
 /* 监管态中断挂起寄存器 sip */
-static inline uint64 r_sip() {
+static inline uint64 r_sip()
+{
   uint64 x;
   asm volatile("csrr %0, sip" : "=r"(x));
   return x;
@@ -79,7 +85,8 @@ static inline void w_sip(uint64 x) { asm volatile("csrw sip, %0" : : "r"(x)); }
 #define SIE_STIE (1L << 5) /* 时钟中断使能 */
 #define SIE_SSIE (1L << 1) /* 软件中断使能 */
 
-static inline uint64 r_sie() {
+static inline uint64 r_sie()
+{
   uint64 x;
   asm volatile("csrr %0, sie" : "=r"(x));
   return x;
@@ -91,7 +98,8 @@ static inline void w_sie(uint64 x) { asm volatile("csrw sie, %0" : : "r"(x)); }
 #define MIE_MTIE (1L << 7)  /* 机器态时钟中断使能 */
 #define MIE_MSIE (1L << 3)  /* 机器态软件中断使能 */
 
-static inline uint64 r_mie() {
+static inline uint64 r_mie()
+{
   uint64 x;
   asm volatile("csrr %0, mie" : "=r"(x));
   return x;
@@ -99,81 +107,96 @@ static inline uint64 r_mie() {
 static inline void w_mie(uint64 x) { asm volatile("csrw mie, %0" : : "r"(x)); }
 
 /* 监管态异常程序计数器 sepc：记录发生Trap时的PC地址 */
-static inline uint64 r_sepc() {
+static inline uint64 r_sepc()
+{
   uint64 x;
   asm volatile("csrr %0, sepc" : "=r"(x));
   return x;
 }
-static inline void w_sepc(uint64 x) {
+static inline void w_sepc(uint64 x)
+{
   asm volatile("csrw sepc, %0" : : "r"(x));
 }
 
 /* 机器态"委托"寄存器：把哪些中断/异常委托给S态处理 */
-static inline uint64 r_medeleg() {
+static inline uint64 r_medeleg()
+{
   uint64 x;
   asm volatile("csrr %0, medeleg" : "=r"(x));
   return x;
 }
-static inline void w_medeleg(uint64 x) {
+static inline void w_medeleg(uint64 x)
+{
   asm volatile("csrw medeleg, %0" : : "r"(x));
 }
-static inline uint64 r_mideleg() {
+static inline uint64 r_mideleg()
+{
   uint64 x;
   asm volatile("csrr %0, mideleg" : "=r"(x));
   return x;
 }
-static inline void w_mideleg(uint64 x) {
+static inline void w_mideleg(uint64 x)
+{
   asm volatile("csrw mideleg, %0" : : "r"(x));
 }
 
 /* 监管态陷入向量寄存器 stvec：存放陷阱处理入口地址 */
-static inline uint64 r_stvec() {
+static inline uint64 r_stvec()
+{
   uint64 x;
   asm volatile("csrr %0, stvec" : "=r"(x));
   return x;
 }
-static inline void w_stvec(uint64 x) {
+static inline void w_stvec(uint64 x)
+{
   asm volatile("csrw stvec, %0" : : "r"(x));
 }
 
 /* 机器态陷入向量寄存器 mtvec */
-static inline void w_mtvec(uint64 x) {
+static inline void w_mtvec(uint64 x)
+{
   asm volatile("csrw mtvec, %0" : : "r"(x));
 }
 
 /* 地址转换与保护寄存器 satp：控制MMU分页模式和根页表地址（Lab3）*/
-static inline uint64 r_satp() {
+static inline uint64 r_satp()
+{
   uint64 x;
   asm volatile("csrr %0, satp" : "=r"(x));
   return x;
 }
-static inline void w_satp(uint64 x) {
+static inline void w_satp(uint64 x)
+{
   asm volatile("csrw satp, %0" : : "r"(x));
 }
 
 /* 监管态中断/异常原因寄存器 scause */
-static inline uint64 r_scause() {
+static inline uint64 r_scause()
+{
   uint64 x;
   asm volatile("csrr %0, scause" : "=r"(x));
   return x;
 }
 
 /* 监管态陷入值寄存器 stval：记录触发异常时的"出事"地址 */
-static inline uint64 r_stval() {
+static inline uint64 r_stval()
+{
   uint64 x;
   asm volatile("csrr %0, stval" : "=r"(x));
   return x;
 }
 
 /* 机器态硬件线程ID mhartid：获取当前CPU核心编号 */
-static inline uint64 r_mhartid() {
+static inline uint64 r_mhartid()
+{
   uint64 x;
   asm volatile("csrr %0, mhartid" : "=r"(x));
   return x;
 }
 
 /* 线程指针寄存器 tp：在本实验框架中用来存当前 hartid，方便 mycpu() 使用 */
-static inline uint64 r_tp() {
+static inline uint64 r_tp()
+{
   uint64 x;
   asm volatile("mv %0, tp" : "=r"(x));
   return x;
@@ -181,17 +204,24 @@ static inline uint64 r_tp() {
 static inline void w_tp(uint64 x) { asm volatile("mv tp, %0" : : "r"(x)); }
 
 /* 程序计数器 ra（返回地址）*/
-static inline uint64 r_ra() {
+static inline uint64 r_ra()
+{
   uint64 x;
   asm volatile("mv %0, ra" : "=r"(x));
   return x;
 }
 
 /* 栈指针 sp */
-static inline uint64 r_sp() {
+static inline uint64 r_sp()
+{
   uint64 x;
   asm volatile("mv %0, sp" : "=r"(x));
   return x;
+}
+
+static inline void w_mscratch(uint64 x)
+{
+  asm volatile("csrw mscratch, %0" : : "r"(x));
 }
 
 /* TLB 刷新指令：修改页表后必须执行，否则CPU会使用过时的翻译缓存 */
@@ -200,7 +230,8 @@ static inline void sfence_vma() { asm volatile("sfence.vma zero, zero"); }
 /* 开关全局中断的便捷函数（Lab4 使用）*/
 static inline void intr_on() { w_sstatus(r_sstatus() | SSTATUS_SIE); }
 static inline void intr_off() { w_sstatus(r_sstatus() & ~SSTATUS_SIE); }
-static inline int intr_get() {
+static inline int intr_get()
+{
   uint64 x = r_sstatus();
   return (x & SSTATUS_SIE) != 0;
 }
