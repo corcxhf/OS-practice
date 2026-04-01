@@ -72,34 +72,29 @@ void sys_trap_handler(void)
       static int ticks = 0;
       ticks++;
       if (ticks % 10 == 0)
-        printf("Tick!\n");
+        ;
+      // printf("Tick!\n");
       break;
 
     case 9:
     {
 
       int hartid = r_tp();
-      int irq = *(uint32 *)PLIC_SCLAIM(hartid); // 读 SCLAIM 寄存器获取设备号
+      int irq = *(uint32 *)PLIC_SCLAIM(hartid);
 
       if (irq == UART0_IRQ)
-      {
-
-        while ((*(uint8 *)(UART0 + 5) & 1) != 0) // 读取 LSR 寄存器判断是否有数据
+        while ((*(uint8 *)(UART0 + 5) & 1) != 0)
         {
-          char c = *(uint8 *)(UART0 + 0); // 读取 RHR 寄存器拿到字符
-          *(uint8 *)(UART0 + 0) = c; // 写入 THR 寄存器回显
+          char c = *(uint8 *)(UART0 + 0);
+          *(uint8 *)(UART0 + 0) = c;
         }
-      }
-      else if (irq != 0)
-      {
-        printf("Unexpected interrupt irq=%d\n", irq);
-      }
 
-      /* 3. Complete：通知 PLIC 该设备处理完毕 */
+      else if (irq != 0)
+        printf("Unexpected interrupt irq=%d\n", irq);
+
       if (irq != 0)
-      {
-        *(uint32 *)PLIC_SCLAIM(hartid) = irq; // 将刚刚的设备号写回 SCLAIM
-      }
+        *(uint32 *)PLIC_SCLAIM(hartid) = irq;
+
       break;
     }
     default:
