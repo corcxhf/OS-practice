@@ -110,12 +110,13 @@ run: $(KERNEL)
 
 # 启动 QEMU 并暂停，等待 GDB 连接（调试模式）
 debug: $(KERNEL)
+	-pkill -f qemu-system-riscv64
 	qemu-system-riscv64 \
 	    -machine virt \
 	    -bios none \
 	    -kernel $(KERNEL) \
 	    -nographic \
-	    -s -S &
+	    -s -S 
 	@echo ""
 	@echo "QEMU 已暂停，等待 GDB 连接..."
 	@echo "在新终端中运行："
