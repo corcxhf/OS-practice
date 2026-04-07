@@ -76,7 +76,10 @@ SRCS = \
 	kernel/trap/kernelvec.S\
 	kernel/trap/trap.c\
 	kernel/trap/timervec.S\
-	kernel/trap/plic.c
+	kernel/trap/plic.c \
+	kernel/proc/proc.c \
+	kernel/proc/swtch.S \
+	kernel/trap/trampoline.S
 
 
 #   ^ Lab1 基础文件，后续实验在此追加

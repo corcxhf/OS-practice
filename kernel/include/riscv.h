@@ -224,6 +224,17 @@ static inline void w_mscratch(uint64 x)
   asm volatile("csrw mscratch, %0" : : "r"(x));
 }
 
+static inline void w_sscratch(uint64 x)
+{
+  __asm__ volatile("csrw sscratch, %0" : : "r"(x));
+}
+static inline uint64 r_sscratch()
+{
+  uint64 x;
+  __asm__ volatile("csrr %0, sscratch" : "=r"(x));
+  return x;
+}
+
 /* TLB 刷新指令：修改页表后必须执行，否则CPU会使用过时的翻译缓存 */
 static inline void sfence_vma() { asm volatile("sfence.vma zero, zero"); }
 

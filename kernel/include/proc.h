@@ -7,13 +7,14 @@
  */
 #ifndef PROC_H
 #define PROC_H
-
+#include "param.h"
 #include "types.h"
 
 /* ================================================================
  * 进程状态枚举
  * ================================================================ */
-enum task_status {
+enum task_status
+{
   TASK_FREE,      /* 未使用的进程表槽位 */
   TASK_ALLOCATED, /* 已分配但尚未就绪（初始化中）*/
   TASK_READY,     /* 就绪态：等待调度器选中并运行 */
@@ -30,7 +31,8 @@ enum task_status {
  *       Caller-Saved 寄存器（t0-t6, a0-a7）由调用者自己保存，
  *       在发起 swtch() 调用前已经由编译器自动保存了。
  * ================================================================ */
-struct context {
+struct context
+{
   /* Callee-saved 通用寄存器 */
   uint64 s0;
   uint64 s1;
@@ -57,7 +59,8 @@ struct context {
  *
  * 字段顺序与 trampoline.S 中的 ld/sd 指令保持严格一致。
  * ================================================================ */
-struct trapframe {
+struct trapframe
+{
   uint64 kernel_satp;   /* 内核页表（用于陷入时切换地址空间）*/
   uint64 kernel_sp;     /* 该进程的内核栈顶地址 */
   uint64 kernel_trap;   /* usertrap() 函数的地址 */
@@ -103,7 +106,8 @@ struct trapframe {
  * 每个进程占用进程表（proc[]数组）中的一个槽位。
  * 进程的所有元信息都记录在这里。
  * ================================================================ */
-struct proc {
+struct proc
+{
   enum task_status status;     /* 进程当前状态 */
   int pid;                     /* 进程 ID（从 1 开始递增分配）*/
   pagetable_t pagetable;       /* 该进程的用户页表 */
@@ -111,11 +115,12 @@ struct proc {
   struct context context;      /* 内核上下文（swtch 使用）*/
   uint64 kstack;               /* 该进程的内核栈顶地址 */
   uint64 sz;                   /* 进程地址空间大小（字节）*/
-  char name[16];               /* 进程名称（调试用）*/
+  char *name;                  /* 进程名称（调试用）*/
 };
 
 /* CPU 描述结构 */
-struct cpu {
+struct cpu
+{
   struct proc *proc;      /* 当前在该 CPU 上运行的进程（如果有）*/
   struct context context; /* 调度器（scheduler）的内核上下文 */
   int noff;               /* 关中断的嵌套层数（push/pop intr）*/
@@ -123,7 +128,7 @@ struct cpu {
 };
 
 extern struct cpu
-    cpus[NCPU]; /* 所有 CPU 核心的描述符数组（param.h 中 NCPU=1）*/
+    cpus[NCPU];                 /* 所有 CPU 核心的描述符数组（param.h 中 NCPU=1）*/
 extern struct proc proc[NPROC]; /* 全局进程表（param.h 中 NPROC=64）*/
 
 #endif /* PROC_H */

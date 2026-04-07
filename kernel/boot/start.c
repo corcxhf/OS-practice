@@ -51,7 +51,6 @@ void timerinit(void)
  * ================================================================ */
 void start(void)
 {
-  printf("START!\n");
   uint64 x = r_mstatus();
   x &= ~MSTATUS_MPP_MASK; 
   x |= MSTATUS_MPP_S;     

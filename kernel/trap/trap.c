@@ -12,12 +12,14 @@
 #include "memlayout.h"
 #include "param.h"
 #include "riscv.h"
+#include "proc.h"
 #include "types.h"
 
 /* 声明 sys_trap_vector 汇编入口（在 kernelvec.S 中定义）*/
 extern char sys_trap_vector[];
 extern void plicinit(void);
 extern void plicinithart(void);
+extern void uservec();
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
  *
@@ -29,8 +31,7 @@ void trapinithart(void)
   w_stvec((uint64)sys_trap_vector);
   plicinit();
   plicinithart();
-
-  w_sstatus(r_sstatus() | SSTATUS_SIE);
+  // w_sstatus(r_sstatus() | SSTATUS_SIE);
 }
 
 /* ================================================================
@@ -53,10 +54,10 @@ void sys_trap_handler(void)
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-
   /* 验证：进入内核陷阱前，S-Mode 的中断应该已经关闭 */
   if ((sstatus & SSTATUS_SPP) == 0)
     panic("sys_trap_handler: not from supervisor mode");
+
   if (intr_get())
     panic("sys_trap_handler: entered with interrupts enabled");
 
@@ -69,11 +70,9 @@ void sys_trap_handler(void)
     {
     case 1:
       w_sip(r_sip() & ~2);
-      static int ticks = 0;
-      ticks++;
-      if (ticks % 10 == 0)
-        ;
-      // printf("Tick!\n");
+      printf("KERNEL TICK!\n");
+      if (myproc() != 0 && myproc()->status == TASK_RUNNING)
+        yield();
       break;
 
     case 9:
@@ -98,7 +97,7 @@ void sys_trap_handler(void)
       break;
     }
     default:
-      printf("sys_trap_handler: unknown interrupt irq=%ld\n", irq);
+      printf("sys_trap_handler: unknown interrupt irq=%d\n", irq);
       break;
     }
   }
@@ -134,13 +133,15 @@ void usertrap(void)
   w_stvec((uint64)sys_trap_vector);
 
   uint64 cause = r_scause();
-
   if (cause == 8)
   {
-    /* 来自 U-Mode 的 ecall（系统调用）*/
-
-    /* 允许中断（系统调用可能涉及耗时 I/O 操作）*/
     intr_on();
+    struct proc *p = myproc();
+    w_stvec((uint64)sys_trap_vector);
+    p->trapframe->epc += 4;
+    intr_on();
+    printf("syscal from %s (pid = %d)\n", p->name, p->pid);
+    usertrapret();
 
     /* ================================================================
      * TODO [Lab6-任务2]：
@@ -152,6 +153,13 @@ void usertrap(void)
     /* 分发给系统调用处理函数 */
     // syscall();
   }
+  else if (cause == 0x8000000000000001L)
+  {
+    w_sip(r_sip() & ~2);
+    printf("USER TICK FROM %d\n", myproc()->pid);
+    yield();
+    usertrapret();
+  }
   else
   {
     /* 用户态发生异常（如非法内存访问），直接终止该进程 */
@@ -159,4 +167,19 @@ void usertrap(void)
     /* 理想情况下应该 exit(-1) 杀死该进程，暂不实现 */
     panic("usertrap");
   }
+}
+
+void usertrapret()
+{
+  intr_off();
+  struct proc *p = myproc();
+  w_stvec((uint64)uservec);
+  p->trapframe->kernel_sp = p->kstack + PGSIZE;
+  p->trapframe->kernel_trap = (uint64)usertrap;
+
+  w_sscratch((uint64)p->trapframe);
+
+  w_sstatus((r_sstatus() & ~SSTATUS_SPP) | SSTATUS_SPIE);
+  w_sepc(p->trapframe->epc);
+  __asm__ volatile("sret");
 }

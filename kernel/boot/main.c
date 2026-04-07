@@ -20,6 +20,9 @@
  * ============================================================= */
 
 /* 声明在 uart.c 中实现的函数（Lab2完成后改用 defs.h 统一管理）*/
+
+#include "riscv.h"
+
 extern void uart_puts(char *s);
 extern void printf(char *fmt, ...);
 extern void clear_screen();
@@ -29,20 +32,22 @@ extern void kvminithart();
 extern void start();
 extern void trapinithart();
 extern void plicinithart();
+extern void intr_on();
+extern void scheduler();
+extern void procinit();
+extern void userinit();
 
 void start_main()
 {
 
-  kinit();       // 1. 必须第一步：建立 free_mem_list，此后才能 kalloc
-  kvmininit();   // 2. 建立内核页表（内部会 kalloc 页表页）
-  kvminithart(); // 3. 写 satp，开启 MMU
-  clear_screen();
-  printf("Memory initialized. Paging enabled!\n");
+  kinit(), kvmininit(), kvminithart();
   trapinithart();
+  intr_on();
+  procinit();
+  userinit();
+  userinit();
+  userinit();
+  userinit();
 
-  // start();
-  // printf("BACK\n");
-
-  while (1)
-    ;
+  scheduler();
 }

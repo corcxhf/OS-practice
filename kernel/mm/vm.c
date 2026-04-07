@@ -202,3 +202,11 @@ void kvminithart(void)
    *   注意：这两步顺序不能颠倒！
    * ================================================================ */
 }
+
+void set_pte_u(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    panic("set_pte_u: pte should exist");
+  *pte |= PTE_U | PTE_R | PTE_X | PTE_W;
+}

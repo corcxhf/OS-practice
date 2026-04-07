@@ -14,10 +14,26 @@
 #include "riscv.h"
 #include "types.h"
 
-/* 全局进程表和 CPU 描述符（在 proc.h 中 extern 声明）*/
+extern void set_pte_u(pagetable_t pagetable, uint64 va);
 struct proc proc[NPROC];
 struct cpu cpus[NCPU];
 
+static uint8 proczero_code[] = {
+    0x73,
+    0x00,
+    0x00,
+    0x00, // ecall
+    0x73,
+    0x00,
+    0x00,
+    0x00, // ecall
+    0x6f,
+    0x00,
+    0x00,
+    0x00, // j .
+};
+
+extern pagetable_t kernel_pagetable;
 /* 进程 ID 计数器（每次 allocpid 返回后递增）*/
 static int nextpid = 1;
 
@@ -26,7 +42,8 @@ static int nextpid = 1;
  *
  * 实现方式：读取 tp 寄存器（在 start.c 中被设置为 hartid）
  * ================================================================ */
-struct cpu *mycpu(void) {
+struct cpu *mycpu(void)
+{
   int hartid = r_tp();
   return &cpus[hartid];
 }
@@ -41,16 +58,43 @@ struct proc *myproc(void) { return mycpu()->proc; }
  * ================================================================ */
 int allocpid(void) { return nextpid++; }
 
+void *memset(void *dst, int v, unsigned long n)
+{
+  unsigned char *p = (unsigned char *)dst;
+  unsigned char val = (unsigned char)v;
+  for (unsigned long i = 0; i < n; i++)
+    p[i] = val;
+  return dst;
+}
+
+void *memmove(void *dest, const void *src, unsigned long n)
+{
+  unsigned char *d = (unsigned char *)dest;
+  const unsigned char *s = (const unsigned char *)src;
+  if (d == s || n == 0)
+    return dest;
+  if (d < s)
+    for (unsigned long i = 0; i < n; i++)
+      d[i] = s[i];
+  else
+    for (unsigned long i = n; i > 0; i--)
+      d[i - 1] = s[i - 1];
+  return dest;
+}
+
 /* ================================================================
  * procinit — 初始化进程表（内核启动时调用一次）
  *
  * 任务：将进程表中所有条目的状态初始化为 TASK_FREE。
  * ================================================================ */
-void procinit(void) {
+void procinit(void)
+{
   /* ================================================================
    * TODO [Lab5-任务1-步骤1]：
    *   遍历 proc[] 数组，将每个进程的 status 置为 TASK_FREE。
    * ================================================================ */
+  for (int i = 0; i < NPROC; i++)
+    proc[i].status = TASK_FREE;
 }
 
 /* ================================================================
@@ -64,17 +108,26 @@ void procinit(void) {
  *   - 分配 trapframe 页（用于保存用户寄存器）
  *   - 初始化内核 context（ra 设为某个"进程首次被调度时跳入的地址"）
  * ================================================================ */
-struct proc *allocproc(void) {
+struct proc *allocproc(void)
+{
   struct proc *p;
 
   /* 在进程表中寻找一个 TASK_FREE 的槽位 */
-  for (p = proc; p < &proc[NPROC]; p++) {
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
     if (p->status == TASK_FREE)
       goto found;
   }
   return 0; /* 进程表已满 */
 
 found:
+  p->pid = allocpid();
+  if ((p->trapframe = kalloc()) == 0)
+  {
+    p->status = TASK_FREE;
+    return 0;
+  }
+  p->status = TASK_ALLOCATED;
   /* ================================================================
    * TODO [Lab5-任务1-步骤2]：
    *   完成进程初始化：
@@ -82,7 +135,6 @@ found:
    *   2. 分配 trapframe 页：调用 kalloc()；若失败则将状态恢复为 TASK_FREE 并返回0
    *   3. 将进程状态设为 TASK_ALLOCATED
    * ================================================================ */
-
   return p;
 }
 
@@ -101,43 +153,71 @@ found:
  *     5. 当进程放弃 CPU（yield/sleep/exit）后，swtch 返回到这里
  *     6. 清除 mycpu()->proc，继续找下一个
  * ================================================================ */
-void scheduler(void) {
+void scheduler(void)
+{
   struct proc *p;
   struct cpu *c = mycpu();
 
   c->proc = 0;
 
-  for (;;) {
+  for (;;)
+  {
     /* 必须打开中断！否则时钟信号无法到达，调度无法触发 */
     intr_on();
 
-    for (p = proc; p < &proc[NPROC]; p++) {
-      /* ================================================================
-       * TODO [Lab5-任务3]：
-       *   完成调度器核心逻辑：
-       *   1. 检查 p->status == TASK_READY
-       *   2. 将状态改为 TASK_RUNNING
-       *   3. 将 c->proc 设为 p
-       *   4. 调用 swtch 切换到 p 的上下文：swtch(&c->context, &p->context)
-       *   5. swtch 返回后（进程放弃了CPU），清零 c->proc
-       * ================================================================ */
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      if (p->status == TASK_READY)
+      {
+        p->status = TASK_RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        c->proc = 0;
+      }
     }
   }
 }
 
-/* ================================================================
- * yield — 当前进程主动放弃 CPU（由时钟中断处理函数调用）
- *
- * 过程：将自己的状态从 TASK_RUNNING 改回 TASK_READY，然后切回调度器。
- * ================================================================ */
-void yield(void) {
+void yield(void)
+{
   struct proc *p = myproc();
+  p->status = TASK_READY;
+  swtch(&p->context, &mycpu()->context);
+}
 
-  /* ================================================================
-   * TODO [Lab5-任务4]：
-   *   1. 将进程状态改为 TASK_READY
-   *   2. 调用 swtch 切回调度器上下文：swtch(&p->context, &mycpu()->context)
-   *
-   *   思考：为什么是 "进程 → 调度器" 而不是 "进程A → 进程B" 直接切换？
-   * ================================================================ */
+void forkret()
+{
+  usertrapret();
+}
+
+void userinit()
+{
+  struct proc *p = allocproc();
+  if (p == 0)
+    return;
+  if ((p->kstack = (uint64)kalloc()) == 0)
+  {
+    p->status = TASK_FREE;
+    return;
+  }
+  p->context.sp = p->kstack + PGSIZE;
+  p->context.ra = (uint64)forkret;
+
+  uint64 code = (uint64)kalloc();
+  memmove((void *)code, (void *)proczero_code, PGSIZE);
+  set_pte_u(kernel_pagetable, code);
+  // mappages(kernel_pagetable, code, PGSIZE, code, PTE_R | PTE_X | PTE_U);
+
+  uint64 userstack = (uint64)kalloc();
+  if (userstack == 0)
+    return;
+  set_pte_u(kernel_pagetable, userstack);
+  // mappages(kernel_pagetable, userstack, PGSIZE, userstack, PTE_R | PTE_W | PTE_U);
+
+  memset(p->trapframe, 0, PGSIZE);
+  p->trapframe->epc = code;
+  p->trapframe->sp = userstack + PGSIZE;
+
+  p->name = "proczero";
+  p->status = TASK_READY;
 }
