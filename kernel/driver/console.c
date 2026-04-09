@@ -4,49 +4,38 @@ extern void uart_putc(char c);
 
 static char digits[] = "0123456789abcdef";
 
-static void printint(int xx, int base, int sign)
-{
-  char buf[16];
-  int i = 0;
-  unsigned int x;
-  if (sign && xx < 0)
-  {
-    x = (unsigned int)(-xx);
-    sign = 1;
-  }
-  else
-  {
-    x = (unsigned int)xx;
-    sign = 0;
-  }
+static void consputc(int c) { uart_putc((char)c); }
 
+void printint(long xx, int base, int sign)
+{
+  char buf[64];
+  int i;
+  unsigned long x;
+  if (sign && (sign = (xx < 0)))
+    x = -xx;
+  else
+    x = xx;
+
+  i = 0;
   do
   {
     buf[i++] = digits[x % base];
-    x /= base;
-  } while (x != 0);
-
+  } while ((x /= base) != 0);
   if (sign)
     buf[i++] = '-';
-
-  while (i--)
-    uart_putc(buf[i]);
+  while (--i >= 0)
+    consputc((int)buf[i]);
 }
-
-/* 单字符输出包装（方便后续扩展，比如同时写入日志缓冲区）*/
-static void consputc(int c) { uart_putc((char)c); }
 
 void printf(char *fmt, ...)
 {
   va_list ap;
   int i, c;
   char *s;
-
+  int is_long;
   if (fmt == 0)
     return;
-
   va_start(ap, fmt);
-
   for (i = 0; (c = fmt[i] & 0xff) != 0; i++)
   {
     if (c != '%')
@@ -54,27 +43,42 @@ void printf(char *fmt, ...)
       consputc(c);
       continue;
     }
-
-    /* 遇到 '%'，读取格式符 */
+    is_long = 0;
     c = fmt[++i] & 0xff;
+    if (c == 'l')
+    {
+      is_long = 1;
+      c = fmt[++i] & 0xff;
+    }
     if (c == 0)
       break;
-
     switch (c)
     {
     case 'd':
-      printint(va_arg(ap, int), 10, 1);
+      if (is_long)
+        printint(va_arg(ap, long), 10, 1);
+      else
+        printint(va_arg(ap, int), 10, 1);
+      break;
+    case 'u':
+      if (is_long)
+        printint(va_arg(ap, unsigned long), 10, 0);
+      else
+        printint(va_arg(ap, unsigned int), 10, 0);
       break;
 
     case 'x':
-      printint(va_arg(ap, int), 16, 0);
+      if (is_long)
+        printint(va_arg(ap, unsigned long), 16, 0);
+      else
+        printint(va_arg(ap, unsigned int), 16, 0);
+      break;
 
     case 'p':
       printint(va_arg(ap, unsigned long), 16, 0);
       break;
 
     case 's':
-
       if ((s = va_arg(ap, char *)) == 0)
         s = "(null)";
       for (; *s; ++s)
@@ -91,6 +95,8 @@ void printf(char *fmt, ...)
 
     default:
       consputc('%');
+      if (is_long)
+        consputc('l');
       consputc(c);
       break;
     }
