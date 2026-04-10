@@ -11,8 +11,6 @@
 void plicinithart(void)
 {
     int hartid = r_tp(); // 获取当前核心编号
-
-
     *(uint32 *)PLIC_SENABLE(hartid) = (1 << UART0_IRQ);
     *(uint32 *)PLIC_SPRIORITY(hartid) = 0;
 }

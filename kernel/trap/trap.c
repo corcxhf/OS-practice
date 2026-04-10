@@ -160,6 +160,25 @@ void usertrap(void)
     yield();
     usertrapret();
   }
+  else if (cause == 0x8000000000000009L)
+  {
+    int hartid = r_tp();
+    int irq = *(uint32 *)PLIC_SCLAIM(hartid);
+
+    if (irq == UART0_IRQ)
+      while ((*(uint8 *)(UART0 + 5) & 1) != 0)
+      {
+        char c = *(uint8 *)(UART0 + 0);
+        *(uint8 *)(UART0 + 0) = c;
+      }
+
+    else if (irq != 0)
+      printf("Unexpected interrupt irq=%d\n", irq);
+
+    if (irq != 0)
+      *(uint32 *)PLIC_SCLAIM(hartid) = irq;
+    usertrapret();
+  }
   else
   {
     /* 用户态发生异常（如非法内存访问），直接终止该进程 */
