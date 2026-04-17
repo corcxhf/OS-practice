@@ -24,6 +24,11 @@
 
 /* 获取定义长度的宏 */
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
+extern uint64 sys_getpid();
+extern uint64 sys_exit(void);
+// extern uint64 sys_fork(void);
+extern uint64 sys_write(void);
+// extern uint64 sys_wait(void);
 
 /* ================================================================
  * TODO [Lab6-任务3-步骤1]：
@@ -38,24 +43,108 @@
  *   后续可按需添加更多系统调用。
  * ================================================================ */
 static uint64 (*syscalls[20])(void) = {
-    /* [SYS_getpid] = sys_getpid, */ /* <-- 取消注释并添加这行 */
+    [SYS_getpid] = sys_getpid,
+    [SYS_exit] = sys_exit,
+    [SYS_fork] = sys_fork,
+    [SYS_write] = sys_write,
+    [SYS_wait] = sys_wait,
 };
 
 /* ================================================================
  * syscall — 系统调用分发主函数（由 usertrap 调用）
  * ================================================================ */
-void syscall(void) {
-  struct proc *p = myproc();
+void syscall(void)
+{
+    struct proc *p = myproc();
 
-  /* 从陷阱帧读取系统调用号（用户在 a7 寄存器中填入的值）*/
-  int num = p->trapframe->a7;
+    /* 从陷阱帧读取系统调用号（用户在 a7 寄存器中填入的值）*/
+    int num = p->trapframe->a7;
+    if (1 <= num && num < NELEM(syscalls) && syscalls[num] != 0)
+        p->trapframe->a0 = syscalls[num]();
+    else
+        p->trapframe->a0 = -1;
 
-  /* ================================================================
-   * TODO [Lab6-任务3-步骤2]：
-   *   1. 检查 num 是否在合法范围内（1 <= num < NELEM(syscalls)），
-   *      且 syscalls[num] 不为 NULL。
-   *   2. 若合法，调用 syscalls[num]()，
-   *      将返回值存入 p->trapframe->a0（用户程序会从 a0 读取返回值）。
-   *   3. 若非法，打印错误并将 p->trapframe->a0 = -1（返回错误码）。
-   * ================================================================ */
+    /* ================================================================
+     * TODO [Lab6-任务3-步骤2]：
+     *   1. 检查 num 是否在合法范围内（1 <= num < NELEM(syscalls)），
+     *      且 syscalls[num] 不为 NULL。
+     *   2. 若合法，调用 syscalls[num]()，
+     *      将返回值存入 p->trapframe->a0（用户程序会从 a0 读取返回值）。
+     *   3. 若非法，打印错误并将 p->trapframe->a0 = -1（返回错误码）。
+     * ================================================================ */
+}
+
+static uint64 argraw(int n)
+{
+    struct proc *p = myproc();
+    switch (n)
+    {
+    case 0:
+        return p->trapframe->a0;
+    case 1:
+        return p->trapframe->a1;
+    case 2:
+        return p->trapframe->a2;
+    case 3:
+        return p->trapframe->a3;
+    case 4:
+        return p->trapframe->a4;
+    case 5:
+        return p->trapframe->a5;
+    }
+    panic("argraw");
+    return -1;
+}
+
+int argint(int n, int *ip)
+{
+    *ip = argraw(n);
+    return 0;
+}
+
+int argaddr(int n, uint64 *ap)
+{
+    *ap = argraw(n);
+    return 0;
+}
+
+int fetchstr(uint64 addr, char *buf, int max)
+{
+    char *src = (char *)addr;
+    int i;
+    for (i = 0; i < max - 1; i++)
+    {
+        buf[i] = src[i];
+        if (src[i] == '\0')
+            return i;
+    }
+    buf[i] = '\0';
+    return -1;
+}
+
+int strlen(const char *s)
+{
+    int n;
+    for (n = 0; s[n]; n++)
+        ;
+    return n;
+}
+
+char *safestrcpy(char *s, const char *t, int n)
+{
+    char *os = s;
+    if (n <= 0)
+        return os;
+    while (--n > 0 && (*s++ = *t++) != 0)
+        ;
+    *s = 0;
+    return os;
+}
+
+int argstr(int n, char *buf, int max)
+{
+    uint64 addr;
+    if (argaddr(n, &addr) < 0)
+        return -1;
+    return fetchstr(addr, buf, max);
 }

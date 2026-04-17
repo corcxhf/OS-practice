@@ -14,6 +14,8 @@
 #define PTE_W (1L << 2) /* 可写 Writable */
 #define PTE_X (1L << 3) /* 可执行 Executable */
 #define PTE_U (1L << 4) /* 用户态可访问 User-accessible */
+#define PTE_A (1L << 6)
+#define PTE_D (1L << 7)
 
 /* 从虚拟地址 va 中提取第 level 级的 9 位 VPN（Virtual Page Number）索引 */
 #define PXSHIFT(level) (PGSHIFT + (9 * (level)))
@@ -59,6 +61,8 @@ static inline void w_mepc(uint64 x)
 #define SSTATUS_UPIE (1L << 4)
 #define SSTATUS_SIE (1L << 1) /* S态全局中断使能位（当前是否允许中断）*/
 #define SSTATUS_UIE (1L << 0)
+
+#define SSTATUS_SUM (1L << 18)
 
 static inline uint64 r_sstatus()
 {

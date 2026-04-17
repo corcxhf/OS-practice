@@ -210,3 +210,68 @@ void set_pte_u(pagetable_t pagetable, uint64 va)
     panic("set_pte_u: pte should exist");
   *pte |= PTE_U | PTE_R | PTE_X | PTE_W;
 }
+
+void *memmove(void *dest, const void *src, unsigned long n)
+{
+  unsigned char *d = (unsigned char *)dest;
+  const unsigned char *s = (const unsigned char *)src;
+  if (d == s || n == 0)
+    return dest;
+  if (d < s)
+    for (unsigned long i = 0; i < n; i++)
+      d[i] = s[i];
+  else
+    for (unsigned long i = n; i > 0; i--)
+      d[i - 1] = s[i - 1];
+  return dest;
+}
+
+void *memcpy(void *dst, const void *src, unsigned long n)
+{
+  return memmove(dst, src, n);
+}
+
+int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+  char *mem;
+
+  // 以页面（4KB）为步长，遍历父进程的所有内存
+  for (i = 0; i < sz; i += PGSIZE)
+  {
+    // 1. 找到父进程该虚拟地址对应的页表项 (PTE)
+    if ((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+
+    // 2. 检查该页是否有效 (PTE_V)
+    if ((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+
+    // 3. 提取父进程的物理地址 (PA) 和 权限位 (Flags)
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+
+    // 4. 为子进程申请一个新的物理页
+    if ((mem = kalloc()) == 0)
+      goto err;
+
+    // 5. 将父进程物理页的内容完整拷贝到子进程的新页中
+    memmove(mem, (char *)pa, PGSIZE);
+
+    // 6. 在子进程的页表中建立映射：虚拟地址 i -> 新物理页 mem
+    // 注意：权限位 flags 必须和父进程完全一致
+    if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0)
+    {
+      kfree(mem);
+      goto err;
+    }
+  }
+  return 0;
+
+err:
+  // 如果中间出错了（比如内存不够），需要释放掉已经分配的页面
+  // uvmunmap(new, 0, i, 1); // 这是一个假设你有的清理函数
+  return -1;
+}

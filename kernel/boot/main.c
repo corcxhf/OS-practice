@@ -22,8 +22,8 @@ void start_main()
   intr_on();
   procinit();
   userinit();
-  userinit();
-  userinit();
-  userinit();
+  // userinit();
+  // userinit();
+  // userinit();
   scheduler();
 }

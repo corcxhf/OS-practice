@@ -106,8 +106,19 @@ struct trapframe
  * 每个进程占用进程表（proc[]数组）中的一个槽位。
  * 进程的所有元信息都记录在这里。
  * ================================================================ */
+
+struct spinlock
+{
+  uint locked; // 0 表示锁是开的，1 表示锁被占用
+
+  char *name;      // 锁的名字
+  struct cpu *cpu; // 哪个 CPU 持有了这把锁（防止同一个 CPU 重复加锁导致死锁）
+};
+
 struct proc
 {
+  struct spinlock lock;
+
   enum task_status status;     /* 进程当前状态 */
   int pid;                     /* 进程 ID（从 1 开始递增分配）*/
   pagetable_t pagetable;       /* 该进程的用户页表 */
@@ -116,6 +127,10 @@ struct proc
   uint64 kstack;               /* 该进程的内核栈顶地址 */
   uint64 sz;                   /* 进程地址空间大小（字节）*/
   char *name;                  /* 进程名称（调试用）*/
+  struct proc *parent;         /*父进程指针*/
+  int xstate;                  /*退出状态*/
+  void *chan;                  /*睡眠通道*/
+  int killed;                  /*被杀标志*/
 };
 
 /* CPU 描述结构 */

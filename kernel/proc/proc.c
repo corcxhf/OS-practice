@@ -18,6 +18,13 @@ extern void set_pte_u(pagetable_t pagetable, uint64 va);
 struct proc proc[NPROC];
 struct cpu cpus[NCPU];
 
+extern void acquire(struct spinlock *);
+extern void initlock(struct spinlock *lk, char *name);
+extern void release(struct spinlock *lk);
+extern int holding(struct spinlock *lk);
+
+extern void *memmove(void *dest, const void *src, unsigned long n);
+
 static uint8 proczero_code[] = {
     0x73,
     0x00,
@@ -32,6 +39,13 @@ static uint8 proczero_code[] = {
     0x00,
     0x00, // j .
 };
+
+/* * 声明由链接器 (ld -b binary) 自动生成的隐藏符号。
+ * 命名规则是：_binary_文件名_扩展名_后缀
+ * 因为我们在 Makefile 里生成的是 initcode.bin，所以名字如下：
+ */
+extern unsigned char _binary_initcode_bin_start[];
+extern unsigned char _binary_initcode_bin_size[];
 
 extern pagetable_t kernel_pagetable;
 /* 进程 ID 计数器（每次 allocpid 返回后递增）*/
@@ -67,21 +81,6 @@ void *memset(void *dst, int v, unsigned long n)
   return dst;
 }
 
-void *memmove(void *dest, const void *src, unsigned long n)
-{
-  unsigned char *d = (unsigned char *)dest;
-  const unsigned char *s = (const unsigned char *)src;
-  if (d == s || n == 0)
-    return dest;
-  if (d < s)
-    for (unsigned long i = 0; i < n; i++)
-      d[i] = s[i];
-  else
-    for (unsigned long i = n; i > 0; i--)
-      d[i - 1] = s[i - 1];
-  return dest;
-}
-
 /* ================================================================
  * procinit — 初始化进程表（内核启动时调用一次）
  *
@@ -94,7 +93,7 @@ void procinit(void)
    *   遍历 proc[] 数组，将每个进程的 status 置为 TASK_FREE。
    * ================================================================ */
   for (int i = 0; i < NPROC; i++)
-    proc[i].status = TASK_FREE;
+    proc[i].status = TASK_FREE, initlock(&proc[i].lock, "proclock");
 }
 
 /* ================================================================
@@ -115,8 +114,10 @@ struct proc *allocproc(void)
   /* 在进程表中寻找一个 TASK_FREE 的槽位 */
   for (p = proc; p < &proc[NPROC]; p++)
   {
+    acquire(&p->lock);
     if (p->status == TASK_FREE)
       goto found;
+    release(&p->lock);
   }
   return 0; /* 进程表已满 */
 
@@ -128,6 +129,7 @@ found:
     return 0;
   }
   p->status = TASK_ALLOCATED;
+  release(&p->lock);
   /* ================================================================
    * TODO [Lab5-任务1-步骤2]：
    *   完成进程初始化：
@@ -167,6 +169,7 @@ void scheduler(void)
 
     for (p = proc; p < &proc[NPROC]; p++)
     {
+      acquire(&p->lock);
       if (p->status == TASK_READY)
       {
         p->status = TASK_RUNNING;
@@ -174,50 +177,96 @@ void scheduler(void)
         swtch(&c->context, &p->context);
         c->proc = 0;
       }
+      release(&p->lock);
     }
   }
+}
+
+void sched(void)
+{
+  struct proc *p = myproc();
+  if (!holding(&p->lock))
+    panic("sched p->lock");
+  if (mycpu()->noff != 1)
+    panic("sched locks");
+  if (p->status == TASK_RUNNING)
+    panic("sched running");
+  if (intr_get())
+    panic("sched interruptible");
+
+  swtch(&p->context, &mycpu()->context);
 }
 
 void yield(void)
 {
   struct proc *p = myproc();
+  acquire(&p->lock);
   p->status = TASK_READY;
-  swtch(&p->context, &mycpu()->context);
+  sched();
+  release(&p->lock);
 }
 
 void forkret()
 {
+  release(&myproc()->lock);
   usertrapret();
 }
 
 void userinit()
 {
   struct proc *p = allocproc();
+  acquire(&p->lock);
   if (p == 0)
+  {
+    release(&p->lock);
     return;
+  }
   if ((p->kstack = (uint64)kalloc()) == 0)
   {
     p->status = TASK_FREE;
+    release(&p->lock);
     return;
   }
+
+  uint64 initcode_size = (uint64)_binary_initcode_bin_size;
+
   p->context.sp = p->kstack + PGSIZE;
   p->context.ra = (uint64)forkret;
 
   uint64 code = (uint64)kalloc();
-  memmove((void *)code, (void *)proczero_code, PGSIZE);
+
+  memmove((void *)code, _binary_initcode_bin_start, initcode_size);
+  // memmove((void *)code, (void *)proczero_code, PGSIZE);
   set_pte_u(kernel_pagetable, code);
-  // mappages(kernel_pagetable, code, PGSIZE, code, PTE_R | PTE_X | PTE_U);
 
   uint64 userstack = (uint64)kalloc();
   if (userstack == 0)
     return;
   set_pte_u(kernel_pagetable, userstack);
-  // mappages(kernel_pagetable, userstack, PGSIZE, userstack, PTE_R | PTE_W | PTE_U);
 
+  asm volatile("sfence.vma zero, zero");
   memset(p->trapframe, 0, PGSIZE);
   p->trapframe->epc = code;
   p->trapframe->sp = userstack + PGSIZE;
 
   p->name = "proczero";
   p->status = TASK_READY;
+  release(&p->lock);
+}
+
+void wakeup(void *chan)
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    if (p != myproc())
+    {
+      acquire(&p->lock);
+      if (p->status == TASK_SLEEPING && p->chan == chan)
+      {
+        p->status = TASK_READY;
+      }
+      release(&p->lock);
+    }
+  }
 }

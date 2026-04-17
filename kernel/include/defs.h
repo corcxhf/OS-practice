@@ -14,6 +14,7 @@ struct trapframe;
 struct buf;
 struct inode;
 struct dirent;
+struct spinlock;
 
 /* ======================================================
  * Lab1 新增：uart 串口驱动
@@ -76,7 +77,7 @@ struct proc *allocproc(void);
 void scheduler(void) __attribute__((noreturn));
 void yield(void);
 void sched(void);
-void sleep(void *chan);
+void sleep(void *chan, struct spinlock *lk);
 void wakeup(void *chan);
 
 /* ======================================================

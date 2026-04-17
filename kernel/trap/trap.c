@@ -20,6 +20,8 @@ extern char sys_trap_vector[];
 extern void plicinit(void);
 extern void plicinithart(void);
 extern void uservec();
+extern void consoleintr(int);
+extern void userret(uint64);
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
  *
@@ -85,7 +87,7 @@ void sys_trap_handler(void)
         while ((*(uint8 *)(UART0 + 5) & 1) != 0)
         {
           char c = *(uint8 *)(UART0 + 0);
-          *(uint8 *)(UART0 + 0) = c;
+          consoleintr(c);
         }
 
       else if (irq != 0)
@@ -140,7 +142,9 @@ void usertrap(void)
     w_stvec((uint64)sys_trap_vector);
     p->trapframe->epc += 4;
     intr_on();
-    printf("syscal from %s (pid = %d)\n", p->name, p->pid);
+    // printf("syscal [%d] from [%s] [pid = %d] \n", p->trapframe->a7, p->name, p->pid);
+
+    syscall();
     usertrapret();
 
     /* ================================================================
@@ -151,7 +155,6 @@ void usertrap(void)
      * ================================================================ */
 
     /* 分发给系统调用处理函数 */
-    // syscall();
   }
   else if (cause == 0x8000000000000001L)
   {
@@ -169,7 +172,7 @@ void usertrap(void)
       while ((*(uint8 *)(UART0 + 5) & 1) != 0)
       {
         char c = *(uint8 *)(UART0 + 0);
-        *(uint8 *)(UART0 + 0) = c;
+        consoleintr(c);
       }
 
     else if (irq != 0)
@@ -181,13 +184,19 @@ void usertrap(void)
   }
   else
   {
+    if (cause == 15)
+    {
+      printf("\n[FATAL] Store Page Fault!\n");
+      printf("sepc  (报错指令) = %p\n", r_sepc());
+      printf("stval (报错地址) = %p\n", r_stval());
+      panic("scause 15");
+    }
     /* 用户态发生异常（如非法内存访问），直接终止该进程 */
     printf("usertrap: unexpected scause=%ld\n", cause);
     /* 理想情况下应该 exit(-1) 杀死该进程，暂不实现 */
     panic("usertrap");
   }
 }
-
 void usertrapret()
 {
   intr_off();
@@ -200,5 +209,8 @@ void usertrapret()
 
   w_sstatus((r_sstatus() & ~SSTATUS_SPP) | SSTATUS_SPIE);
   w_sepc(p->trapframe->epc);
-  __asm__ volatile("sret");
+  // printf("USERTRAP : sepc = %ld\n", p->trapframe->epc);
+
+  userret((uint64)p->trapframe);
+  // __asm__ volatile("sret");
 }

@@ -137,3 +137,22 @@ void panic(char *msg)
   while (1)
     ; /* 死循环，防止CPU继续乱跑 */
 }
+
+void consoleintr(int c)
+{
+  switch (c)
+  {
+  case '\r':
+    consputc('\r');
+    consputc('\n');
+    break;
+  case 0x7f:
+    consputc('\b');
+    consputc(' ');
+    consputc('\b');
+    break;
+  default:
+    consputc(c);
+    break;
+  }
+}
