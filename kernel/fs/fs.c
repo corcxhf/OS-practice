@@ -308,9 +308,9 @@ void iupdate(struct inode *ip)
 {
   struct buf *bp = bread(ip->dev, sb.inodestart + ip->inum / IPB);
   struct dinode *dip = (struct dinode *)bp->data + ip->inum % IPB;
-  uint blockno = sb.inodestart + ip->inum / IPB;
-  if (ip->inum > 1)
-    printf("DEBUG iupdate: writing inum %d to block %d\n", ip->inum, blockno);
+  // uint blockno = sb.inodestart + ip->inum / IPB;
+  // if (ip->inum > 1)
+  //   printf("DEBUG iupdate: writing inum %d to block %d\n", ip->inum, blockno);
   // 把内存字段写回磁盘 dinode（与 ilock 的方向相反）
   dip->type = ip->type;
   dip->major = ip->major;

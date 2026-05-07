@@ -51,9 +51,7 @@ SRCS = \
 KERNEL   = kernel.elf
 LDSCRIPT = kernel.ld
 
-# ============================================================
-# 构建目标
-# ============================================================
+
 all: $(KERNEL)
 
 mkfs: mkfs.c
@@ -63,7 +61,6 @@ fs.img: mkfs
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
 	./mkfs
 
-# 【修改点】：所有 initcode 相关产物现在都在 $U/ 目录下
 $U/initcode.out: $U/initcode.S $U/initcode.ld
 	$(CC) $(CFLAGS) -nostdlib -nostartfiles -fno-pic -fno-pie -T $U/initcode.ld -o $U/initcode.out $U/initcode.S
 
@@ -74,7 +71,6 @@ $U/initcode.o: $U/initcode.bin
 	# 进入 user 目录执行链接，这样符号名就不会带 user_ 前缀
 	cd $U && $(LD) -r -b binary -o initcode.o initcode.bin
 
-# 【修改点】：内核依赖更新为 $U/initcode.o
 $(KERNEL): $(SRCS) $(LDSCRIPT) $U/initcode.o
 	$(CC) $(CFLAGS) -T $(LDSCRIPT) $(SRCS) $U/initcode.o -o $@
 	@echo "======================================"
@@ -102,7 +98,6 @@ debug: $(KERNEL) fs.img
 	-nographic \
 	-s -S 
 
-# 【修改点】：清理 user 目录下的中间文件
 clean: 
 	rm -f $(KERNEL) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d mkfs fs.img
 
