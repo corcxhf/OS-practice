@@ -122,4 +122,16 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff);
 int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n);
 int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n);
 
+struct inode *ialloc(uint dev, short type);
+void ilock(struct inode *ip);
+void iunlock(struct inode *ip);
+void iput(struct inode *ip);
+void iupdate(struct inode *ip);
+uint bmap(struct inode *ip, uint bn);
+int dirlink(struct inode *dp, char *name, uint inum);
+struct inode *namei(char *path);
+struct inode *nameiparent(char *path, char *name);
+
+
+
 #endif /* DEFS_H */

@@ -25,20 +25,20 @@ extern int holding(struct spinlock *lk);
 
 extern void *memmove(void *dest, const void *src, unsigned long n);
 
-static uint8 proczero_code[] = {
-    0x73,
-    0x00,
-    0x00,
-    0x00, // ecall
-    0x73,
-    0x00,
-    0x00,
-    0x00, // ecall
-    0x6f,
-    0x00,
-    0x00,
-    0x00, // j .
-};
+// static uint8 proczero_code[] = {
+//     0x73,
+//     0x00,
+//     0x00,
+//     0x00, // ecall
+//     0x73,
+//     0x00,
+//     0x00,
+//     0x00, // ecall
+//     0x6f,
+//     0x00,
+//     0x00,
+//     0x00, // j .
+// };
 
 /* * 声明由链接器 (ld -b binary) 自动生成的隐藏符号。
  * 命名规则是：_binary_文件名_扩展名_后缀
@@ -229,7 +229,7 @@ void userinit()
   }
 
   uint64 initcode_size = (uint64)_binary_initcode_bin_size;
-
+  p->pagetable = kernel_pagetable;
   p->context.sp = p->kstack + PGSIZE;
   p->context.ra = (uint64)forkret;
 

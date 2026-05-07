@@ -43,55 +43,30 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 {
   if (va >= MAXVA)
     panic("walk: virtual address out of range");
-
-  /* 从 level-2 到 level-1，共遍历两层（最后 level-0 由调用者处理）*/
   for (int level = 2; level > 0; level--)
   {
-    /* 取当前层的 PTE 指针 */
     pte_t *pte = &pagetable[PX(level, va)];
 
     if (*pte & PTE_V)
-    {
       pagetable = (pagetable_t)PTE2PA((uint64)*pte);
-      /* 该 PTE 有效：提取下一级页表的物理地址 */
-      /* ================================================================
-       * TODO [Lab3-任务2-步骤1]：
-       *   从 *pte 中提取物理页号，转为下一级页表的物理基地址。
-       *   使用 riscv.h 中的 PTE2PA 宏完成转换，并更新 pagetable 指针。
-       * ================================================================ */
-    }
+    
     else
     {
-      /* 该 PTE 无效：中间级页表不存在 */
       if (!alloc)
         return 0; /* 不允许分配，返回失败 */
 
-      /* 分配一个新的物理页作为下一级页表 */
       pagetable = (pagetable_t)kalloc();
       if (pagetable == 0)
         return 0; /* 内存耗尽 */
 
       for (char *p = (char *)pagetable; p < (char *)pagetable + PGSIZE; p++)
         *p = 0;
-      /* 新页表必须清零！否则随机数据会被当成有效 PTE */
-      /* ================================================================
-       * TODO [Lab3-任务2-步骤2]：
-       *   将新分配的页表清零（PGSIZE字节）。
-       *   可用 memset，或手动循环将每个 uint64 槽位赋为0。
-       *   不清零会导致随机数据被当成有效PTE！
-       * ================================================================ */
 
       *pte = PA2PTE(pagetable);
       *pte |= PTE_V;
-      /* ================================================================
-       * TODO [Lab3-任务2-步骤3]：
-       *   将新页表的物理地址写入当前 PTE，并设置 PTE_V（有效位）。
-       *   使用 PA2PTE 宏将物理地址转为PTE格式，然后按位或上 PTE_V。
-       * ================================================================ */
     }
   }
 
-  /* 返回 level-0 页表中对应的 PTE 指针（最终映射层）*/
   return &pagetable[PX(0, va)];
 }
 
@@ -128,12 +103,6 @@ int mappages(pagetable_t pagetable, uint64 pa, uint64 va, uint64 size,
     /* 重复映射是内核 Bug */
     if (*pte & PTE_V)
       panic("mappages: remap");
-
-    /* ================================================================
-     * TODO [Lab3-任务3]：
-     *   将物理地址 pa 和权限 perm 以及有效位 PTE_V 写入 *pte。
-     *   PTE格式：高位为PPN（PA2PTE得到），低位为权限位（perm | PTE_V）。
-     * ================================================================ */
     *pte = PA2PTE(pa) | (perm | PTE_V);
 
     if (a == last)
@@ -172,7 +141,7 @@ void kvmininit(void)
    *   映射 UART0 串口设备（MMIO区域），使内核可以访问串口寄存器。
    *   地址：UART0（见 memlayout.h），大小：PGSIZE，权限：可读+可写。
    * ================================================================ */
-
+  mappages(kernel_pagetable, 0x10001000, 0x10001000, PGSIZE, PTE_R | PTE_W);
   mappages(kernel_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
   mappages(kernel_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
   /* ================================================================
@@ -274,4 +243,24 @@ err:
   // 如果中间出错了（比如内存不够），需要释放掉已经分配的页面
   // uvmunmap(new, 0, i, 1); // 这是一个假设你有的清理函数
   return -1;
+}
+
+uint64 walkaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  // 1. 调用你现有的 walk，不要分配新页 (alloc = 0)
+  pte = walk(pagetable, va, 0);
+
+  // 2. 检查 PTE 是否存在，以及是否有效 (PTE_V)
+  // 同时必须检查 PTE_U 位，确保这是用户有权访问的地址
+  if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+    return 0;
+
+  // 3. 从 PTE 中提取物理页号 (PPN) 并加上页内偏移
+  // PTE 的高 44 位（对于 Sv39）是 PPN
+  pa = PTE2PA(*pte) | (va & (PGSIZE - 1));
+
+  return pa;
 }

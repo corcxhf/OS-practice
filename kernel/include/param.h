@@ -16,4 +16,10 @@
 #define FSSIZE 1000               /* 文件系统大小（块数） */
 #define MAXPATH 128               /* 文件路径字符串最大长度 */
 
+/* 文件系统布局参数 */
+#define BSIZE 1024                       /* 磁盘块大小（字节）*/
+#define NDIRECT 12                       /* 直接块指针数量 */
+#define NINDIRECT (BSIZE / sizeof(uint)) /* 一级间接块中的指针数量 */
+#define DIRSIZ 14                        /* 目录项中文件名的最大长度 */
+#define IPB (BSIZE / sizeof(struct dinode))
 #endif /* PARAM_H */

@@ -131,6 +131,8 @@ struct proc
   int xstate;                  /*退出状态*/
   void *chan;                  /*睡眠通道*/
   int killed;                  /*被杀标志*/
+
+  struct file *ofile[NOFILE];
 };
 
 /* CPU 描述结构 */

@@ -44,7 +44,13 @@ SRCS = \
     kernel/syscall/syscall.c \
     kernel/syscall/sysproc.c \
     kernel/proc/spinlock.c \
-    kernel/trap/userret.S
+    kernel/trap/userret.S\
+    kernel/fs/bio.c\
+    kernel/fs/file.c\
+    kernel/fs/fs.c\
+    kernel/syscall/sysfile.c\
+    kernel/driver/virtio_disk.c
+
 
 KERNEL   = kernel.elf
 LDSCRIPT = kernel.ld
@@ -54,6 +60,15 @@ LDSCRIPT = kernel.ld
 # ============================================================
 all: $(KERNEL)
 
+# 【修复 1】：统一目标名和产出文件名
+mkfs: mkfs.c
+	gcc mkfs.c -o mkfs
+
+# 生成镜像依赖 mkfs 工具
+fs.img: mkfs
+	@echo "正在创建并格式化磁盘镜像 fs.img..."
+	./mkfs
+
 initcode.out: initcode.S initcode.ld
 	$(CC) $(CFLAGS) -nostdlib -nostartfiles -fno-pic -fno-pie -T initcode.ld -o initcode.out initcode.S
 
@@ -62,7 +77,6 @@ initcode.bin: initcode.out
 
 initcode.o: initcode.bin
 	$(LD) -r -b binary -o initcode.o initcode.bin
-        
 
 # 【核心黑魔法 2】：内核编译依赖 initcode.o，并将其一起链接进去
 $(KERNEL): $(SRCS) $(LDSCRIPT) initcode.o
@@ -72,23 +86,28 @@ $(KERNEL): $(SRCS) $(LDSCRIPT) initcode.o
 	@echo " 现在运行 'make run' 启动 QEMU"
 	@echo "======================================"
 
-# 在 QEMU 中运行内核
-run: $(KERNEL)
-	qemu-system-riscv64 \
-        -machine virt \
-        -bios none \
-        -kernel $(KERNEL) \
-        -nographic
+QEMU_DISK = -drive file=fs.img,if=none,format=raw,id=x0 \
+            -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-# 启动 QEMU 并暂停，等待 GDB 连接（调试模式）
-debug: $(KERNEL)
+# 【修复 2】：让 run 依赖 fs.img，确保开机前硬盘一定存在
+# 【修复 3】：删除了 $(QEMU_DISK) 前面多余的 "-"
+run: $(KERNEL) fs.img
+	qemu-system-riscv64 \
+	-machine virt \
+	-bios none \
+	-kernel $(KERNEL) \
+	$(QEMU_DISK) \
+	-nographic
+
+debug: $(KERNEL) fs.img
 	-pkill -f qemu-system-riscv64
 	qemu-system-riscv64 \
-        -machine virt \
-        -bios none \
-        -kernel $(KERNEL) \
-        -nographic \
-        -s -S 
+	-machine virt \
+	-bios none \
+	-kernel $(KERNEL) \
+	$(QEMU_DISK) \
+	-nographic \
+	-s -S 
 	@echo ""
 	@echo "QEMU 已暂停，等待 GDB 连接..."
 	@echo "在新终端中运行："
@@ -98,8 +117,8 @@ debug: $(KERNEL)
 	@echo "  (gdb) continue"
 	@echo ""
 
-# 清除编译产物（加入了提取二进制时产生的临时文件）
-clean:
-	rm -f $(KERNEL) *.o *.d initcode_tmp.o initcode.out initcode.bin
+# 【修复 4】：清理时顺手把 mkfs 和 fs.img 也删掉，保持干净
+clean: 
+	rm -f $(KERNEL) *.o *.d initcode_tmp.o initcode.out initcode.bin mkfs fs.img
 
 .PHONY: all run debug clean

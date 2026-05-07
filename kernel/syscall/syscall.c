@@ -20,7 +20,11 @@
 #define SYS_wait 3
 #define SYS_getpid 11
 #define SYS_sbrk 12
+
+#define SYS_open 15
 #define SYS_write 16
+#define SYS_read 17
+#define SYS_close 18
 
 /* 获取定义长度的宏 */
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
@@ -28,6 +32,10 @@ extern uint64 sys_getpid();
 extern uint64 sys_exit(void);
 // extern uint64 sys_fork(void);
 extern uint64 sys_write(void);
+extern uint64 sys_open(void);
+extern uint64 sys_read(void);
+extern uint64 sys_close(void);
+extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
 // extern uint64 sys_wait(void);
 
 /* ================================================================
@@ -48,6 +56,10 @@ static uint64 (*syscalls[20])(void) = {
     [SYS_fork] = sys_fork,
     [SYS_write] = sys_write,
     [SYS_wait] = sys_wait,
+
+    [SYS_open] sys_open,
+    [SYS_read] sys_read,
+    [SYS_close] sys_close,
 };
 
 /* ================================================================
@@ -108,17 +120,21 @@ int argaddr(int n, uint64 *ap)
     return 0;
 }
 
+// 这是一个模拟 walkaddr 的逻辑，你需要根据你的页表实现来写
 int fetchstr(uint64 addr, char *buf, int max)
 {
     char *src = (char *)addr;
-    int i;
-    for (i = 0; i < max - 1; i++)
+    uint64 s = r_sstatus();
+    w_sstatus(s | SSTATUS_SUM);
+    for (int i = 0; i < max - 1; i++)
     {
+        if (addr < 0x10)
+            return -1;
+
         buf[i] = src[i];
         if (src[i] == '\0')
             return i;
     }
-    buf[i] = '\0';
     return -1;
 }
 

@@ -25,10 +25,12 @@ extern void initlock(struct spinlock *lk, char *name);
 extern void release(struct spinlock *lk);
 extern int holding(struct spinlock *lk);
 
-extern char *safestrcpy(char *s, const char *t, int n);
+extern char *safepy(char *s, const char *t, int n);
 extern int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz);
 extern void wakeup(void *chan);
 extern void forkret();
+
+extern int filewrite(struct file *f, uint64 addr, int n);
 /* ================================================================
  * sys_getpid — 返回当前进程的 PID
  *
@@ -89,6 +91,7 @@ uint64 sys_write(void)
 {
   int fd, len;
   char buf[128];
+  struct file *f;
 
   argint(0, &fd);
   argint(2, &len);
@@ -110,9 +113,13 @@ uint64 sys_write(void)
       // 确保你的 console 输出函数是正确的（比如 uartputc）
       consoleintr(buf[i]);
     }
+    return 0;
   }
 
-  return len;
+  f = myproc()->ofile[fd];
+
+  // 调用之前写好的 filewrite，它内部会处理 ilock/writei/iunlock
+  return filewrite(f, (uint64)buf, (int)len);
 }
 
 void sleep(void *chan, struct spinlock *lk)

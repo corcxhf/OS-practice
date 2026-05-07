@@ -10,11 +10,8 @@ extern void plicinithart(void);
 extern void start_main(void);
 uint64 timer_scratch[NCPU][5];
 
-void plicinit(void)
-{
-  *(uint32 *)(PLIC + UART0_IRQ * 4) = 1;
-  *(uint8 *)(UART0 + 1) = 1;
-}
+extern void plicinit(void);
+
 
 /* ================================================================
  * timerinit — 配置 CLINT 硬件定时器，使其定期产生 M-Mode 时钟中断
@@ -37,7 +34,6 @@ void timerinit(void)
   w_mtvec((uint64)timervec);
 
   w_mie(r_mie() | MIE_MTIE);
-  
 }
 
 /* ================================================================
@@ -52,14 +48,14 @@ void timerinit(void)
 void start(void)
 {
   uint64 x = r_mstatus();
-  x &= ~MSTATUS_MPP_MASK; 
-  x |= MSTATUS_MPP_S;     
+  x &= ~MSTATUS_MPP_MASK;
+  x |= MSTATUS_MPP_S;
   w_mstatus(x);
   w_mepc((uint64)start_main);
   asm volatile("csrw pmpaddr0, %0" : : "r"(0x3fffffffffffffull));
   asm volatile("csrw pmpcfg0, %0" : : "r"(0xf));
 
-  w_medeleg(0xffff); 
+  w_medeleg(0xffff);
   w_mideleg(0xffff);
   w_sie(r_sie() | SIE_SEIE | SIE_STIE | SIE_SSIE);
   timerinit();

@@ -1,5 +1,6 @@
 #include "riscv.h"
 
+#define ROOTDEV 1
 extern void uart_puts(char *s);
 extern void printf(char *fmt, ...);
 extern void clear_screen();
@@ -13,17 +14,23 @@ extern void intr_on();
 extern void scheduler();
 extern void procinit();
 extern void userinit();
+extern void fsinit(int dev);
 
 void start_main()
 {
 
   kinit(), kvmininit(), kvminithart();
   trapinithart();
+
   intr_on();
   procinit();
+
+  fsinit(ROOTDEV);
+
   userinit();
   // userinit();
   // userinit();
   // userinit();
+
   scheduler();
 }

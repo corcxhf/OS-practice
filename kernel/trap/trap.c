@@ -22,6 +22,7 @@ extern void plicinithart(void);
 extern void uservec();
 extern void consoleintr(int);
 extern void userret(uint64);
+extern void virtio_disk_intr();
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
  *
@@ -89,7 +90,10 @@ void sys_trap_handler(void)
           char c = *(uint8 *)(UART0 + 0);
           consoleintr(c);
         }
-
+      else if (irq == VIRTIO0_IRQ)
+      {
+        virtio_disk_intr();
+      }
       else if (irq != 0)
         printf("Unexpected interrupt irq=%d\n", irq);
 
@@ -174,7 +178,10 @@ void usertrap(void)
         char c = *(uint8 *)(UART0 + 0);
         consoleintr(c);
       }
-
+    else if (irq == VIRTIO0_IRQ)
+    {
+      virtio_disk_intr();
+    }
     else if (irq != 0)
       printf("Unexpected interrupt irq=%d\n", irq);
 
