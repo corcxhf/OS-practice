@@ -73,7 +73,7 @@ void sys_trap_handler(void)
     {
     case 1:
       w_sip(r_sip() & ~2);
-      printf("KERNEL TICK!\n");
+      // printf("KERNEL TICK!\n");
       if (myproc() != 0 && myproc()->status == TASK_RUNNING)
         yield();
       break;
