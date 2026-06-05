@@ -167,48 +167,32 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
-
-  /* 1. 基础检查：偏移量或写入长度是否合法 */
   if (off > ip->size || off + n < off)
     return -1;
-  /* 检查是否超过文件系统支持的最大长度 (NDIRECT + NINDIRECT) * BSIZE */
   if (off + n > (NDIRECT + NINDIRECT) * BSIZE)
     return -1;
 
   for (tot = 0; tot < n; tot += m, off += m, src += m)
   {
-    /* 2. 找到当前偏移量对应的物理块号 */
-    /* bmap 会在块不存在时自动通过 balloc 分配新块 */
     uint blockno = bmap(ip, off / BSIZE);
 
-    /* 3. 读取该块到缓冲区 */
     bp = bread(ip->dev, blockno);
 
-    /* 4. 计算本次在当前块中写入的长度 */
-    /* 不要超过当前块剩余空间，也不要超过总剩余写入量 */
     m = BSIZE - off % BSIZE;
     if (m > n - tot)
       m = n - tot;
-
-    /* 5. 将数据从源地址拷贝到缓冲区偏移位置 */
-    /* 这里使用 memmove (内核空间) 或 copyin (用户空间) */
     if (user_src)
     {
-      /* 如果你的实验环境有 either_copyin，请使用它 */
-      // either_copyin(bp->data + (off % BSIZE), user_src, src, m);
       memmove(bp->data + (off % BSIZE), (void *)src, m);
     }
     else
     {
       memmove(bp->data + (off % BSIZE), (void *)src, m);
     }
-
-    /* 6. [关键] 将修改后的缓冲块刷回磁盘，并释放 */
     bwrite(bp);
     brelse(bp);
   }
 
-  /* 7. 更新 inode 元数据 */
   if (n > 0 && off > ip->size)
   {
     ip->size = off;
@@ -478,13 +462,6 @@ struct inode *namei(char *path)
   return ip;
 }
 
-/**
- * dirlink - 在目录 dp 中添加一条名为 name, 编号为 inum 的新记录
- * @dp:   父目录的 inode
- * @name: 新文件名
- * @inum: 新文件对应的 inode 编号
- * * 返回值: 成功返回 0，失败返回 -1（如重名或磁盘写满）
- */
 int dirlink(struct inode *dp, char *name, uint inum)
 {
   uint off;

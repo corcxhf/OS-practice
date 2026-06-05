@@ -12,12 +12,6 @@
     */
 
     /*      系统调用号常量（与内核 syscall.c 中的定义一致）*/
-#define SYS_fork 1
-#define SYS_exit 2
-#define SYS_wait 3
-#define SYS_getpid 11
-#define SYS_sbrk 12
-#define SYS_write 16
 
     /*      ================================================================
     *       TODO [Lab6-任务1]：

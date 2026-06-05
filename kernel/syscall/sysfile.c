@@ -141,6 +141,9 @@ uint64 sys_open(void)
 
     return fd;
 }
+
+pte_t *walk(pagetable_t pagetable, uint64 va, int alloc);
+
 uint64
 sys_read(void)
 {
@@ -149,15 +152,40 @@ sys_read(void)
     uint64 addr;
 
     /* 1. 从 trapframe 读取参数 */
-    /* argfd 是 xv6 的常用辅助函数：它同时完成了获取 fd 和检查合法性（第 2 步） */
-    /* 参数 0 是 fd，参数 1 是 addr，参数 2 是 n */
     argint(0, &fd), argint(2, &n), argaddr(1, &addr);
-    f = myproc()->ofile[fd];
 
-    /* 3. 调用 fileread() 并返回实际读取字节数 */
+    // ================== 核心控制台拦截 ==================
+    if (fd == 0)
+    {
+        char *p = (char *)addr;
+        int i;
+
+        // 【关键修复】解除内核访问用户页面的限制
+        uint64 s = r_sstatus();
+        w_sstatus(s | SSTATUS_SUM);
+
+        for (i = 0; i < n; i++)
+        {
+            extern int consgetc(void);
+            int c = consgetc();
+
+            if (c < 0)
+                break;
+            p[i] = (char)c; // 现在硬件允许内核安全地写入这个 U=1 的地址了！
+        }
+
+        // 【关键修复】恢复原本的内核硬件保护状态
+        w_sstatus(s);
+
+        return i;
+    }
+    // ====================================================
+
+    if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+        return -1;
+
     return fileread(f, n, (char *)addr);
 }
-
 uint64 sys_close(void)
 {
     int fd;

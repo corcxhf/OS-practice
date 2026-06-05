@@ -1,10 +1,13 @@
 #include <stdarg.h>
-
+#define CONS_BUF_SIZE 1024
 extern void uart_putc(char c);
 
 static char digits[] = "0123456789abcdef";
 
 static void consputc(int c) { uart_putc((char)c); }
+static char cons_buffer[CONS_BUF_SIZE];
+static int cons_head = 0; // 读指针
+static int cons_tail = 0; // 写指针
 
 void printint(long xx, int base, int sign)
 {
@@ -138,7 +141,7 @@ void panic(char *msg)
     ; /* 死循环，防止CPU继续乱跑 */
 }
 
-void consoleintr(int c)
+void console_print_char(int c)
 {
   switch (c)
   {
@@ -155,4 +158,33 @@ void consoleintr(int c)
     consputc(c);
     break;
   }
+}
+
+void consoleintr(int c)
+{
+  console_print_char(c);
+
+  int next_tail = (cons_tail + 1) % CONS_BUF_SIZE;
+  if (next_tail != cons_head)
+  {
+    if (c == '\r')
+      c = '\n';
+    cons_buffer[cons_tail] = c;
+    cons_tail = next_tail;
+  }
+}
+int consgetc(void)
+{
+  while (cons_head == cons_tail)
+  {
+    // 如果你的内核有实现让出CPU的 yield()，可以在这里调用
+    // 从而防止当前的死循环把 CPU 彻底卡死
+    extern void yield(void);
+    yield();
+  }
+
+  // 从缓冲区拿出一个字符并返回
+  int c = cons_buffer[cons_head];
+  cons_head = (cons_head + 1) % CONS_BUF_SIZE;
+  return c;
 }

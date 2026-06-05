@@ -84,29 +84,17 @@ int fileread(struct file *f, int n, char *buf)
 int filewrite(struct file *f, uint64 addr, int n)
 {
     int r, ret = 0;
-
-    /* 1. 权限检查（你已经写了） */
     if (f->writable == 0)
         return -1;
-
-    /* 3. 加锁：写入前必须锁定 inode */
     ilock(f->ip);
-
-    /* 4. 调用底层 writei 进行真正的磁盘/缓冲区写入 */
-    /* 注意：第二个参数为 1，表示数据源来自用户空间 */
-
     if ((r = writei(f->ip, 1, addr, f->off, n)) > 0)
     {
-        /* 5. 关键：更新该文件描述符的偏移量 */
-        /* 这样下次 write 就会从当前结束的位置继续写 */
         f->off += r;
         ret = r;
     }
     else
-    {
         ret = -1;
-    }
-    /* 6. 解锁：写完了，把 inode 释放给别人用 */
+
     iunlock(f->ip);
 
     return ret;

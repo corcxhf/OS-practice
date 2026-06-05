@@ -15,6 +15,7 @@
 extern struct cpu *mycpu(void);
 
 extern void consoleintr(int);
+extern void console_print_char(char);
 
 extern int argint(int, int *);
 extern int argaddr(int, uint64 *);
@@ -111,7 +112,7 @@ uint64 sys_write(void)
     for (int i = 0; i < len; i++)
     {
       // 确保你的 console 输出函数是正确的（比如 uartputc）
-      consoleintr(buf[i]);
+      console_print_char(buf[i]);
     }
     return 0;
   }

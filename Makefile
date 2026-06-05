@@ -50,6 +50,28 @@ SRCS = \
 
 KERNEL   = kernel.elf
 LDSCRIPT = kernel.ld
+ULIB = \
+    $U/ulib.o \
+    $U/usys.o
+
+UPROGS = \
+    $U/_shell \
+    # $U/_cat \
+    # $U/_ls
+
+$U/%.o: $U/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# 2. 编译用户态 汇编 文件为 .o (针对 usys.S)
+$U/%.o: $U/%.S
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# 3. 链接用户态程序：依赖对象的 .o，公共库 ULIB，以及用户态链接脚本 user.ld
+$U/_%: $U/%.o $(ULIB) $U/user.ld
+	$(LD) -T $U/user.ld -o $@ $< $(ULIB)
+	$(OBJDUMP) -S $@ > $@.asm
+	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $@.sym
+
 
 
 all: $(KERNEL)
@@ -61,14 +83,17 @@ fs.img: mkfs
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
 	./mkfs
 
-$U/initcode.out: $U/initcode.S $U/initcode.ld
-	$(CC) $(CFLAGS) -nostdlib -nostartfiles -fno-pic -fno-pie -T $U/initcode.ld -o $U/initcode.out $U/initcode.S
 
+
+$U/initcode.out: $U/initcode.c $U/initcode.ld
+	$(CC) $(CFLAGS) -mno-relax -nostdlib -nostartfiles -fno-pic -fno-pie -T $U/initcode.ld -o $@ $<
+
+# 2. 剥离 ELF 头部，提取纯二进制指令和数据
 $U/initcode.bin: $U/initcode.out
-	$(OBJCOPY) -S -O binary $U/initcode.out $U/initcode.bin
+	$(OBJCOPY) -S -O binary $< $@
 
+# 3. 重新包装为含有 _binary_... 符号的内核依赖对象
 $U/initcode.o: $U/initcode.bin
-	# 进入 user 目录执行链接，这样符号名就不会带 user_ 前缀
 	cd $U && $(LD) -r -b binary -o initcode.o initcode.bin
 
 $(KERNEL): $(SRCS) $(LDSCRIPT) $U/initcode.o

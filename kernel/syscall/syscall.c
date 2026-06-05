@@ -14,18 +14,6 @@
 #include "riscv.h"
 #include "types.h"
 
-/* 系统调用号常量定义 */
-#define SYS_fork 1
-#define SYS_exit 2
-#define SYS_wait 3
-#define SYS_getpid 11
-#define SYS_sbrk 12
-
-#define SYS_open 15
-#define SYS_write 16
-#define SYS_read 17
-#define SYS_close 18
-
 /* 获取定义长度的宏 */
 #define NELEM(x) (sizeof(x) / sizeof((x)[0]))
 extern uint64 sys_getpid();
@@ -38,18 +26,6 @@ extern uint64 sys_close(void);
 extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
 // extern uint64 sys_wait(void);
 
-/* ================================================================
- * TODO [Lab6-任务3-步骤1]：
- *   完善系统调用函数指针表 syscalls[]。
- *
- *   工作原理：
- *     syscalls[11] = sys_getpid
- *     当用户程序将 a7=11 并执行 ecall 时，
- *     syscall() 会调用 syscalls[11]()，即 sys_getpid()。
- *
- *   目前只实现 sys_getpid，其余留空（NULL）。
- *   后续可按需添加更多系统调用。
- * ================================================================ */
 static uint64 (*syscalls[20])(void) = {
     [SYS_getpid] = sys_getpid,
     [SYS_exit] = sys_exit,
@@ -68,22 +44,11 @@ static uint64 (*syscalls[20])(void) = {
 void syscall(void)
 {
     struct proc *p = myproc();
-
-    /* 从陷阱帧读取系统调用号（用户在 a7 寄存器中填入的值）*/
     int num = p->trapframe->a7;
     if (1 <= num && num < NELEM(syscalls) && syscalls[num] != 0)
         p->trapframe->a0 = syscalls[num]();
     else
         p->trapframe->a0 = -1;
-
-    /* ================================================================
-     * TODO [Lab6-任务3-步骤2]：
-     *   1. 检查 num 是否在合法范围内（1 <= num < NELEM(syscalls)），
-     *      且 syscalls[num] 不为 NULL。
-     *   2. 若合法，调用 syscalls[num]()，
-     *      将返回值存入 p->trapframe->a0（用户程序会从 a0 读取返回值）。
-     *   3. 若非法，打印错误并将 p->trapframe->a0 = -1（返回错误码）。
-     * ================================================================ */
 }
 
 static uint64 argraw(int n)

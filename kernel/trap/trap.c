@@ -163,7 +163,7 @@ void usertrap(void)
   else if (cause == 0x8000000000000001L)
   {
     w_sip(r_sip() & ~2);
-    printf("USER TICK FROM %d\n", myproc()->pid);
+    // printf("USER TICK FROM %d\n", myproc()->pid);
     yield();
     usertrapret();
   }
