@@ -11,16 +11,19 @@
 #include "proc.h"
 #include "riscv.h"
 #include "types.h"
+#include "elf.h"
 
 extern struct cpu *mycpu(void);
-
+extern void *memset(void *dst, int v, unsigned long n);
+extern void *memmove(void *dest, const void *src, unsigned long n);
 extern void consoleintr(int);
 extern void console_print_char(char);
 
 extern int argint(int, int *);
 extern int argaddr(int, uint64 *);
 extern int argstr(int, char *, int);
-
+extern pagetable_t proc_pagetable(struct proc *p);
+extern void proc_freepagetable(pagetable_t pagetable, uint64 sz);
 extern void acquire(struct spinlock *);
 extern void initlock(struct spinlock *lk, char *name);
 extern void release(struct spinlock *lk);
@@ -30,8 +33,13 @@ extern char *safepy(char *s, const char *t, int n);
 extern int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz);
 extern void wakeup(void *chan);
 extern void forkret();
-
 extern int filewrite(struct file *f, uint64 addr, int n);
+extern void iunlockput(struct inode *);
+extern void ilock(struct inode *);
+
+extern int fetchaddr(uint64 addr, uint64 *ip);
+extern int fetchstr(uint64 s, char *dst, int max);
+extern int strlen(const char *s);
 /* ================================================================
  * sys_getpid — 返回当前进程的 PID
  *
@@ -66,9 +74,7 @@ uint64 sys_exit(void)
   argint(0, &p->xstate);
   // 1. 记录退出码
   p->status = TASK_ZOMBIE;
-  printf("Process [%d] exited with code [%d]\n", p->pid, p->xstate);
-  // 2. 【核心修复】：唤醒正在等待的父进程
-  // 这里必须唤醒 p->parent，且通道必须跟 wait 里的 sleep 一致
+  // printf("Process [%d] exited with code [%d]\n", p->pid, p->xstate);
   wakeup(p->parent);
 
   // 3. 切换到调度器，永远不再回来
@@ -203,49 +209,315 @@ uint64 sys_wait(void)
 uint64 sys_fork(void)
 {
   struct proc *p = myproc();
+
+  // 1. 调用你原有的 allocproc，拿到子进程 proc 结构体，以及它自带的物理 trapframe
   struct proc *np = allocproc();
   if (np == 0)
     return -1;
 
-  // 1. 【补救分配】：必须给子进程一个物理页存陷阱帧
-  // 如果不写这行，np->trapframe 就是 0，下一行拷贝时必崩
-  if ((np->trapframe = (struct trapframe *)kalloc()) == 0)
-  {
-    return -1;
-  }
-
-  // 2. 【补救分配】：必须给子进程一个独立的内核栈
+  // 2. 分配内核栈 (kstack)
   if ((np->kstack = (uint64)kalloc()) == 0)
   {
+    // 失败清理
     kfree(np->trapframe);
+    acquire(&np->lock);
+    np->status = TASK_FREE;
+    release(&np->lock);
     return -1;
   }
 
-  // 3. 【现场初始化】：设置子进程醒来后的样子
+  // 3. 设置子进程被调度器切出来时的内核现场
   np->context.sp = np->kstack + PGSIZE;
   np->context.ra = (uint64)forkret;
 
-  // 4. 【正式拷贝】：现在 np->trapframe 有地址了，可以拷了
+  // =======================================================================
+  // 🚨 核心改造一：调用工厂，为子进程创建它专属的独立页表宇宙！
+  // 这个工厂在内部已经帮子进程把 np->trapframe 映射进 np->pagetable 了！
+  // =======================================================================
+  np->pagetable = proc_pagetable(np);
+  if (np->pagetable == 0)
+  {
+    kfree((void *)np->kstack);
+    kfree(np->trapframe);
+    acquire(&np->lock);
+    np->status = TASK_FREE;
+    release(&np->lock);
+    return -1;
+  }
+
+  // 4. 正式拷贝 Trapframe 上下文（克隆父进程的用户态寄存器现场）
+  // 此时 np->trapframe 已经是通过 allocproc 分配好的干净物理页
   *np->trapframe = *p->trapframe;
 
-  // 5. 子进程返回值设为 0
+  // 5. 子进程在用户态的 fork 返回值必须设为 0
   np->trapframe->a0 = 0;
 
-  // 6. 复制用户内存 (uvmcopy)
-  // 这里要注意：如果还在用 kernel_pagetable，uvmcopy 里的映射会产生冲突
+  // =======================================================================
+  // 🚨 核心改造二：深度克隆用户内存 (uvmcopy)
+  // 把父进程私有宇宙的代码、数据、栈，一页一页物理拷贝并映射给子进程的新页表
+  // =======================================================================
+
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
   {
+    // 如果克隆失败，这里需要调用回收机制（先省略，优先跑通）
     return -1;
   }
   np->sz = p->sz;
 
-  // 7. 父子关系
+  // 复制文件描述符
+  for (int i = 0; i < NOFILE; i++)
+    if (p->ofile[i])
+      np->ofile[i] = p->ofile[i];
+
+  // 7. 确立父子名分
   np->parent = p;
 
-  // 8. 激活子进程
+  // 8. 激活子进程，让调度器可以看得到它
   acquire(&np->lock);
   np->status = TASK_READY;
   release(&np->lock);
 
-  return np->pid;
+  return np->pid; // 父进程返回子进程的 PID
+}
+
+int kernel_strlen(const char *s)
+{
+  int len = 0;
+  while (s[len])
+    len++;
+  return len;
+}
+uint64 sys_exec(void)
+{
+  char path[128];
+  uint64 argv[MAXARG];
+  int argc;
+  uint64 uargv, uarg;
+  struct elfhdr elf;
+  struct inode *ip;
+  struct proghdr ph;
+  struct proc *p = myproc();
+  pagetable_t new_pagetable = 0;
+  uint64 sz = 0, old_sz;
+  pagetable_t old_pagetable;
+  uint64 sp, stackbase;
+
+  // =========================================================
+  // 1. 从用户态读取参数（路径 path 和 参数数组 argv）
+  // =========================================================
+  // 获取第一个参数：待执行程序的路径（如 "/echo"）
+  if (argstr(0, path, sizeof(path)) < 0)
+    return -1;
+
+  // 获取第二个参数：用户态的 argv 指针数组地址
+  if (argaddr(1, &uargv) < 0)
+    return -1;
+
+  // 开始解析参数字符串，搬运到内核暂存
+  memset(argv, 0, sizeof(argv));
+  for (argc = 0; argc < MAXARG; argc++)
+  {
+    if (fetchaddr(uargv + sizeof(uint64) * argc, &uarg) < 0)
+      goto bad;
+    if (uarg == 0)
+    {
+      break; // 遇到 NULL 结束
+    }
+    // 分配内核内存暂存参数字符串
+    argv[argc] = (uint64)kalloc();
+    if (argv[argc] == 0)
+      goto bad;
+    if (fetchstr(uarg, (char *)argv[argc], PGSIZE) < 0)
+      goto bad;
+  }
+
+  // =========================================================
+  // 2. 查找并打开 ELF 文件，读取文件头 (ELF Header)
+  // // =========================================================
+  // begin_op();
+
+  if ((ip = namei(path)) == 0)
+  {
+    // end_op();
+    goto bad;
+  }
+  ilock(ip);
+
+  // 读取 ELF 头部
+  if (readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
+    goto bad;
+
+  // 校验 ELF 文件的魔数是否合法
+  if (elf.magic != ELF_MAGIC)
+    goto bad;
+
+  // =========================================================
+  // 3. 创世阶段：调用工厂申请一个属于该进程的全新隔离页表
+  // =========================================================
+  new_pagetable = proc_pagetable(p);
+  if (new_pagetable == 0)
+    goto bad;
+
+  // =========================================================
+  // 4. 解析 ELF 每一个 Segment 并加载代码/数据到新页表宇宙
+  // =========================================================
+  sz = 0;
+  for (int i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
+  {
+    if (readi(ip, 0, (uint64)&ph, off, sizeof(ph)) != sizeof(ph))
+      goto bad;
+    if (ph.type != ELF_PROG_LOAD)
+      continue;
+    if (ph.memsz < ph.filesz)
+      goto bad;
+    if (ph.vaddr + ph.memsz < ph.vaddr)
+      goto bad;
+
+    // 按照页面大小向下、向上对齐虚拟地址边界
+    uint64 va_start = PGROUNDDOWN(ph.vaddr);
+    uint64 va_end = PGROUNDUP(ph.vaddr + ph.memsz);
+
+    // 逐页分配物理内存并建立映射
+    for (uint64 a = va_start; a < va_end; a += PGSIZE)
+    {
+      void *pa = kalloc();
+      if (pa == 0)
+        goto bad;
+      memset(pa, 0, PGSIZE); // 物理页清零
+
+      // 🚨 铁律：你的专属参数顺序 (pagetable, pa, va, size, perm)
+      // 赋予用户态权限 (PTE_U) 以及可读写执行权限
+      if (mappages(new_pagetable, (uint64)pa, a, PGSIZE, PTE_R | PTE_W | PTE_X | PTE_U) < 0)
+      {
+        kfree(pa);
+        goto bad;
+      }
+    }
+
+    // 将磁盘上的段内容，精准读入刚刚映射好的物理内存页中
+    uint64 seg_va = ph.vaddr;
+    uint64 file_off = ph.off;
+    uint64 file_sz = ph.filesz;
+
+    while (file_sz > 0)
+    {
+      uint64 a = PGROUNDDOWN(seg_va);
+      uint64 offset_in_page = seg_va - a;
+      uint64 n = PGSIZE - offset_in_page;
+      if (n > file_sz)
+        n = file_sz;
+
+      // 顺藤摸瓜：查当前的新页表，找到虚拟地址 a 对应的物理地址 pa
+      pte_t *pte = walk(new_pagetable, a, 0);
+      if (pte == 0 || (*pte & PTE_V) == 0)
+        goto bad;
+      uint64 pa = PTE2PA(*pte);
+
+      // 直接从磁盘读入对应的物理页偏移地址
+      if (readi(ip, 0, pa + offset_in_page, file_off, n) != n)
+        goto bad;
+
+      file_sz -= n;
+      seg_va += n;
+      file_off += n;
+    }
+
+    // 更新程序目前使用的虚拟空间最大水位线
+    if (ph.vaddr + ph.memsz > sz)
+      sz = ph.vaddr + ph.memsz;
+  }
+
+  iunlockput(ip);
+  // end_op();
+  ip = 0;
+
+  // =========================================================
+  // 5. 为新宇宙分配并映射用户栈 (User Stack)
+  // =========================================================
+  sz = PGROUNDUP(sz);
+  void *stack_pa = kalloc();
+  if (stack_pa == 0)
+    goto bad;
+  memset(stack_pa, 0, PGSIZE);
+
+  // 🚨 映射用户栈：pa 在前，va (sz) 在后
+  if (mappages(new_pagetable, (uint64)stack_pa, sz, PGSIZE, PTE_R | PTE_W | PTE_U) < 0)
+  {
+    kfree(stack_pa);
+    goto bad;
+  }
+
+  stackbase = sz;
+  sp = sz + PGSIZE; // 初始栈顶虚拟地址（Sv39 下往下生长）
+  sz += PGSIZE;     // 内存大小增加一页
+
+  // =========================================================
+  // 6. 压栈环节：把暂存在内核的 argv 参数字符串推进新用户栈
+  // =========================================================
+  uint64 ustack[MAXARG + 1];
+  for (int i = 0; i < argc; i++)
+  {
+    uint64 len = strlen((char *)argv[i]) + 1;
+    sp -= len;
+    sp -= sp % 16; // RISC-V 栈指针必须 16 字节对齐
+    if (sp < stackbase)
+      goto bad;
+
+    // 映射虚拟栈地址到刚才分配的物理栈内存上
+    // 因为内核在当前阶段是恒等映射，你可以像下面这样通过偏移直接写物理栈：
+    memmove((void *)((uint64)stack_pa + (sp - stackbase)), (void *)argv[i], len);
+    ustack[i] = sp; // 记录该参数在用户态的虚拟地址
+  }
+  ustack[argc] = 0; // argv[argc] = NULL
+
+  // 把 ustack 数组（即各个参数的指针）也推入用户栈
+  sp -= (argc + 1) * sizeof(uint64);
+  sp -= sp % 16;
+  if (sp < stackbase)
+    goto bad;
+  memmove((void *)((uint64)stack_pa + (sp - stackbase)), ustack, (argc + 1) * sizeof(uint64));
+
+  // =========================================================
+  // 7. 终极一换：新旧交替，换表仪式
+  // =========================================================
+  old_pagetable = p->pagetable;
+  old_sz = p->sz;
+
+  // 移交资产
+  p->pagetable = new_pagetable;
+  p->sz = sz;
+
+  // 设置用户态起飞现场
+  p->trapframe->epc = elf.entry; // 新程序的入口地址（如 0x100b0）
+  p->trapframe->sp = sp;         // 刚刚布局好的用户栈顶虚拟地址
+  p->trapframe->a1 = sp;         // 根据 RISC-V C ABI，a1 寄存器存放 argv 指针
+
+  // 释放内核暂存参数时借用的临时物理页
+  for (int i = 0; i < MAXARG; i++)
+  {
+    if (argv[i])
+      kfree((void *)argv[i]);
+  }
+  // 释放老程序占用的旧页表和旧物理内存（防 OOM 核心）
+  if (old_pagetable != 0)
+  {
+    proc_freepagetable(old_pagetable, old_sz);
+  }
+  return argc; // 成功返回！交由 usertrapret 里的 sret 顺滑切表落地！
+
+bad:
+  // 发生灾难，清理残留的半成品
+  for (int i = 0; i < MAXARG; i++)
+  {
+    if (argv[i])
+      kfree((void *)argv[i]);
+  }
+  if (new_pagetable)
+    proc_freepagetable(new_pagetable, sz);
+  if (ip)
+  {
+    iunlockput(ip);
+    // end_op();
+  }
+  return -1;
 }

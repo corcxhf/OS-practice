@@ -23,6 +23,7 @@ extern uint64 sys_write(void);
 extern uint64 sys_open(void);
 extern uint64 sys_read(void);
 extern uint64 sys_close(void);
+extern uint64 sys_exec(void);
 extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
 // extern uint64 sys_wait(void);
 
@@ -32,7 +33,7 @@ static uint64 (*syscalls[20])(void) = {
     [SYS_fork] = sys_fork,
     [SYS_write] = sys_write,
     [SYS_wait] = sys_wait,
-
+    [SYS_exec] = sys_exec,
     [SYS_open] sys_open,
     [SYS_read] sys_read,
     [SYS_close] sys_close,
@@ -86,21 +87,50 @@ int argaddr(int n, uint64 *ap)
 }
 
 // 这是一个模拟 walkaddr 的逻辑，你需要根据你的页表实现来写
-int fetchstr(uint64 addr, char *buf, int max)
+int fetchstr(uint64 s, char *dst, int max)
 {
-    char *src = (char *)addr;
-    uint64 s = r_sstatus();
-    w_sstatus(s | SSTATUS_SUM);
-    for (int i = 0; i < max - 1; i++)
-    {
-        if (addr < 0x10)
-            return -1;
+    struct proc *p = myproc();
+    // 利用 walkaddr 顺着当前老进程的页表查出物理地址，然后安全搬运
+    // 如果你没有 walkaddr，可以用你自己写的 walk(p->pagetable, s, 0) 算出物理地址 pa
+    uint64 va = PGROUNDDOWN(s);
+    uint64 offset = s - va;
 
-        buf[i] = src[i];
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+        return -1;
+
+    uint64 pa = PTE2PA(*pte);
+    char *src = (char *)(pa + offset);
+
+    // 开始搬运字符串直到遇到 \0 或者满了
+    int i = 0;
+    while (i < max)
+    {
+        dst[i] = src[i];
         if (src[i] == '\0')
-            return i;
+            return i; // 返回字符串长度
+        i++;
     }
     return -1;
+}
+
+int fetchaddr(uint64 addr, uint64 *ip)
+{
+    struct proc *p = myproc();
+    uint64 va = PGROUNDDOWN(addr);
+    uint64 offset = addr - va;
+
+    if (addr + sizeof(uint64) > p->sz)
+        return -1;
+
+    pte_t *pte = walk(p->pagetable, va, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+        return -1;
+
+    uint64 pa = PTE2PA(*pte);
+    // 直接从转换后的物理地址读取用户存在那里的指针值
+    *ip = *(uint64 *)(pa + offset);
+    return 0;
 }
 
 int strlen(const char *s)

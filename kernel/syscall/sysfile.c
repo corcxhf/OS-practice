@@ -157,26 +157,40 @@ sys_read(void)
     // ================== 核心控制台拦截 ==================
     if (fd == 0)
     {
-        char *p = (char *)addr;
+        uint64 user_addr = addr; // 用户传进来的 508
         int i;
-
-        // 【关键修复】解除内核访问用户页面的限制
-        uint64 s = r_sstatus();
-        w_sstatus(s | SSTATUS_SUM);
 
         for (i = 0; i < n; i++)
         {
             extern int consgetc(void);
             int c = consgetc();
-
             if (c < 0)
                 break;
-            p[i] = (char)c; // 现在硬件允许内核安全地写入这个 U=1 的地址了！
+
+            // 🚨 核心查表替换 🚨
+            // 1. 算出当前用户虚拟地址所在的整页边界，以及在页内的偏移量
+            uint64 va_page = PGROUNDDOWN(user_addr);
+            uint64 offset = user_addr - va_page;
+
+            // 2. 拿着用户进程自己的私有页表 p->pagetable 去查表
+            // walk 函数会顺着进程的独立页表找到对应的叶子表项
+            pte_t *pte = walk(myproc()->pagetable, va_page, 0);
+            if (pte == 0 || (*pte & PTE_V) == 0)
+            {
+                // 如果用户的这个地址在它的页表里不合法，直接报错返回
+                return -1;
+            }
+
+            // 3. 把对应的物理地址拉出来，加上偏移量，换算出内核能直接读写的内核指针
+            uint64 pa = PTE2PA(*pte);
+            char *kernel_ptr = (char *)(pa + offset);
+
+            // 4. 安全写入！因为此时写入的是内核恒等映射过的高端物理/内核虚拟地址，绝不触发 Page Fault！
+            *kernel_ptr = (char)c;
+
+            // 5. 递增用户虚拟地址，为读取下一个字符做准备
+            user_addr++;
         }
-
-        // 【关键修复】恢复原本的内核硬件保护状态
-        w_sstatus(s);
-
         return i;
     }
     // ====================================================

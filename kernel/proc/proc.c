@@ -22,7 +22,7 @@ extern void acquire(struct spinlock *);
 extern void initlock(struct spinlock *lk, char *name);
 extern void release(struct spinlock *lk);
 extern int holding(struct spinlock *lk);
-
+extern pagetable_t proc_pagetable(struct proc *p);
 extern void *memmove(void *dest, const void *src, unsigned long n);
 
 // static uint8 proczero_code[] = {
@@ -229,25 +229,34 @@ void userinit()
   }
 
   uint64 initcode_size = (uint64)_binary_initcode_bin_size;
-  p->pagetable = kernel_pagetable;
+  p->pagetable = proc_pagetable(p);
   p->context.sp = p->kstack + PGSIZE;
   p->context.ra = (uint64)forkret;
 
-  uint64 code = (uint64)kalloc();
+  // 1. 申请存放 initcode 机器码的物理页
+  uint64 code_pa = (uint64)kalloc();
+  memset((void *)code_pa, 0, PGSIZE);
+  memmove((void *)code_pa, _binary_initcode_bin_start, initcode_size);
 
-  memmove((void *)code, _binary_initcode_bin_start, initcode_size);
-  // memmove((void *)code, (void *)proczero_code, PGSIZE);
-  set_pte_u(kernel_pagetable, code);
+  // 🚨 拨乱反正：不要再搞恒等映射了！
+  // 强行把这页物理内存，映射到用户宇宙的绝对起点——虚拟地址 0x0 处！
+  mappages(p->pagetable, code_pa, 0, PGSIZE, PTE_R | PTE_W | PTE_X | PTE_U);
 
-  uint64 userstack = (uint64)kalloc();
-  if (userstack == 0)
-    return;
-  set_pte_u(kernel_pagetable, userstack);
+  // 2. 分配并映射用户栈
+  uint64 userstack_pa = (uint64)kalloc();
+  memset((void *)userstack_pa, 0, PGSIZE);
+  // 把用户栈安排在虚拟地址 0x1000 处（也就是紧挨着代码段的下一页）
+  mappages(p->pagetable, userstack_pa, PGSIZE, PGSIZE, PTE_R | PTE_W | PTE_U);
 
+  // 3. 冲刷 TLB
   asm volatile("sfence.vma zero, zero");
   memset(p->trapframe, 0, PGSIZE);
-  p->trapframe->epc = code;
-  p->trapframe->sp = userstack + PGSIZE;
+
+  // 🚨 终极解耦：用户态的眼睛从此只能看到低位虚拟地址！
+  p->trapframe->epc = 0;              // 👈 新程序的入口永远是虚拟地址 0x0！
+  p->trapframe->sp = PGSIZE + PGSIZE; // 👈 虚拟地址 0x2000 作为初始栈顶
+
+  p->sz = PGSIZE + PGSIZE; // 👈 明确告诉系统，父进程现在有 2 页大小的用户空间！
 
   p->name = "proczero";
   p->status = TASK_READY;

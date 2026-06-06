@@ -17,6 +17,7 @@
 #include "param.h"
 #include "riscv.h"
 #include "types.h"
+#include "proc.h"
 
 /* 内核根页表（全局变量，Lab3 建立后整个内核都使用它）*/
 pagetable_t kernel_pagetable;
@@ -24,7 +25,13 @@ pagetable_t kernel_pagetable;
 /* 外部符号（由链接脚本/编译器生成，标记内核各段边界）*/
 extern char etext[];       /* 内核代码段结束地址 */
 extern char end_address[]; /* 内核数据段结束地址 */
-
+extern void userret(uint64, uint64);
+extern void *memcpy(void *dst, const void *src, unsigned long n);
+extern void *memmove(void *dest, const void *src, unsigned long n);
+extern void *memset(void *dst, int v, unsigned long n);
+extern void uservec();
+extern int strlen(const char *s);
+extern int fetchaddr(uint64 addr, uint64 *ip);
 /* ================================================================
  * walk — 在三级页表中查找虚拟地址 va 对应的最终 PTE 指针
  *
@@ -49,7 +56,7 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 
     if (*pte & PTE_V)
       pagetable = (pagetable_t)PTE2PA((uint64)*pte);
-    
+
     else
     {
       if (!alloc)
@@ -204,34 +211,37 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
-  uint flags;
+  uint64 flags;
   char *mem;
 
-  // 以页面（4KB）为步长，遍历父进程的所有内存
+  // 获取当前子进程和父进程的核心生命通道边界（物理/虚拟地址）
+  // 确保拷贝时把它们当成禁区保护起来
+  uint64 trapframe_va = PGROUNDDOWN((uint64)myproc()->trapframe);
+  uint64 userret_va = PGROUNDDOWN((uint64)userret);
+
   for (i = 0; i < sz; i += PGSIZE)
   {
-    // 1. 找到父进程该虚拟地址对应的页表项 (PTE)
+    // 🚨 终极防火墙：如果当前遍历到的虚拟地址是 trapframe 或者 userret 的特殊页面
+    // 证明工厂在创建进程时已经独立映射过了，子进程不需要、也绝对不能重复拷贝！直接跳过！
+    if (i == trapframe_va || i == userret_va)
+    {
+      continue;
+    }
+
     if ((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-
-    // 2. 检查该页是否有效 (PTE_V)
+      continue; // 如果父进程这页本来就是空的，直接跳过
     if ((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
 
-    // 3. 提取父进程的物理地址 (PA) 和 权限位 (Flags)
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
 
-    // 4. 为子进程申请一个新的物理页
     if ((mem = kalloc()) == 0)
       goto err;
-
-    // 5. 将父进程物理页的内容完整拷贝到子进程的新页中
     memmove(mem, (char *)pa, PGSIZE);
 
-    // 6. 在子进程的页表中建立映射：虚拟地址 i -> 新物理页 mem
-    // 注意：权限位 flags 必须和父进程完全一致
-    if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0)
+    // 严丝合缝的参数顺序
+    if (mappages(new, (uint64)mem, i, PGSIZE, flags) < 0)
     {
       kfree(mem);
       goto err;
@@ -240,8 +250,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return 0;
 
 err:
-  // 如果中间出错了（比如内存不够），需要释放掉已经分配的页面
-  // uvmunmap(new, 0, i, 1); // 这是一个假设你有的清理函数
   return -1;
 }
 
@@ -263,4 +271,169 @@ uint64 walkaddr(pagetable_t pagetable, uint64 va)
   pa = PTE2PA(*pte) | (va & (PGSIZE - 1));
 
   return pa;
+}
+
+pagetable_t proc_pagetable(struct proc *p)
+{
+  // 1. 申请一个物理页作为一级根页表
+  pagetable_t pgtbl = (pagetable_t)kalloc();
+  if (pgtbl == 0)
+    return 0;
+
+  // 务必清零！保证里面没有任何残留垃圾
+  memset(pgtbl, 0, PGSIZE);
+
+  uint64 userret_pa = PGROUNDDOWN((uint64)userret);
+  if (mappages(pgtbl, userret_pa, userret_pa, PGSIZE, PTE_R | PTE_X) < 0)
+  {
+    return 0;
+  }
+  uint64 uservec_pa = PGROUNDDOWN((uint64)uservec);
+  if (uservec_pa != userret_pa)
+  {
+    mappages(pgtbl, uservec_pa, uservec_pa, PGSIZE, PTE_R | PTE_X);
+  }
+
+  // ==========================================================
+  // 3. 映射生命通道二：陷阱帧 (trapframe 所在的物理页)
+  // userret 汇编需要通过 a0 寄存器去读取这里的寄存器数据
+  // 权限必须是 可读 + 可写 (PTE_R | PTE_W)
+  // ==========================================================
+  uint64 tf_pa = PGROUNDDOWN((uint64)p->trapframe);
+  if (mappages(pgtbl, tf_pa, tf_pa, PGSIZE, PTE_R | PTE_W) < 0)
+  {
+    return 0;
+  }
+
+  return pgtbl;
+}
+
+// =======================================================================
+// 1. 解除虚拟地址映射，并选择性释放对应的物理内存页
+// =======================================================================
+void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
+{
+  uint64 a;
+  pte_t *pte;
+
+  // 严格按页大小对齐检查
+  if ((va % PGSIZE) != 0)
+    panic("uvmunmap: not aligned");
+
+  // 遍历每一页进行解除映射
+  for (a = va; a < va + npages * PGSIZE; a += PGSIZE)
+  {
+    // walk 查找对应的页表项，第三个参数为 0 表示找不到不用创建新的
+    if ((pte = walk(pagetable, a, 0)) == 0)
+      panic("uvmunmap: walk");
+
+    // 检查这个映射是否有效
+    if ((*pte & PTE_V) == 0)
+      panic("uvmunmap: not mapped");
+
+    if (PTE_FLAGS(*pte) == PTE_V)
+      panic("uvmunmap: not a leaf");
+
+    // 如果指定了 do_free = 1，就说明需要把这块物理砖头还给系统
+    if (do_free)
+    {
+      uint64 pa = PTE2PA(*pte);
+      kfree((void *)pa);
+    }
+
+    // 彻底抹除这个页表项，斩断红线
+    *pte = 0;
+  }
+}
+
+// =======================================================================
+// 2. 递归销毁页表树的中间节点（释放页表页面本身占用的内存）
+// =======================================================================
+void freewalk(pagetable_t pagetable)
+{
+  // 一个页表页里有 512 + 1 个页表项
+  for (int i = 0; i < 512; i++)
+  {
+    pte_t pte = pagetable[i];
+
+    // 如果该项有效，且它指向的是下一级页表（而不是物理叶子页）
+    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0)
+    {
+      // 顺藤摸瓜，递归进入下一级页表
+      uint64 child = PTE2PA(pte);
+      freewalk((pagetable_t)child);
+      pagetable[i] = 0;
+    }
+    else if (pte & PTE_V)
+    {
+      // 如果到了叶子节点（代码/栈）却还没被 uvmunmap 清理干净，说明前面漏了
+      panic("freewalk: leaf");
+    }
+  }
+  // 销毁完所有的子节点后，把自己这一页的账本页面也释放掉
+  kfree((void *)pagetable);
+}
+
+// =======================================================================
+// 3. 终极打包函数：供 sys_exec 调用的完整销毁入口
+// =======================================================================
+void proc_freepagetable(pagetable_t pagetable, uint64 sz)
+{
+  // 拿到当前正在执行 exec 的进程控制块
+  struct proc *cur_p = myproc();
+  // 算出当前进程绝对不能被释放的 trapframe 物理页地址
+  uint64 forbidden_pa = PGROUNDDOWN((uint64)cur_p->trapframe);
+
+  for (int i = 0; i < 512; i++)
+  {
+    pte_t pte1 = pagetable[i];
+    if (pte1 & PTE_V)
+    {
+      if (pte1 & (PTE_R | PTE_W | PTE_X))
+      {
+        pagetable[i] = 0;
+        continue;
+      }
+
+      pagetable_t pgtbl2 = (pagetable_t)PTE2PA(pte1);
+      for (int j = 0; j < 512; j++)
+      {
+        pte_t pte2 = pgtbl2[j];
+        if (pte2 & PTE_V)
+        {
+          if (pte2 & (PTE_R | PTE_W | PTE_X))
+          {
+            pgtbl2[j] = 0;
+            continue;
+          }
+
+          pagetable_t pgtbl3 = (pagetable_t)PTE2PA(pte2);
+          for (int k = 0; k < 512; k++)
+          {
+            pte_t pte3 = pgtbl3[k];
+            if ((pte3 & PTE_V) && (pte3 & (PTE_R | PTE_W | PTE_X)))
+            {
+
+              uint64 pa = PTE2PA(pte3);
+
+              // 🚨【终极特赦令】：如果是用户空间或者高端资产，允许释放
+              if ((pte3 & PTE_U) || (pa >= 0x87000000))
+              {
+                // 1. 严格避开内核核心代码区 (0x80000000 ~ 0x80100000)
+                // 2. 严格避开当前进程正在使用的、保命用的 trapframe 物理页！
+                if ((pa < 0x80000000 || pa >= 0x80100000) && (pa != forbidden_pa))
+                {
+                  kfree((void *)pa); // 只有安全的私有资产才允许释放
+                }
+              }
+              pgtbl3[k] = 0; // 抹黑表项
+            }
+          }
+        }
+      }
+    }
+  }
+
+  asm volatile("sfence.vma zero, zero");
+  freewalk(pagetable);
 }

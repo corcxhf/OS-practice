@@ -55,8 +55,7 @@ ULIB = \
     $U/usys.o
 
 UPROGS = \
-    $U/_shell \
-    # $U/_cat \
+    $U/echo
     # $U/_ls
 
 $U/%.o: $U/%.c
@@ -79,10 +78,9 @@ all: $(KERNEL)
 mkfs: mkfs.c
 	gcc mkfs.c -o mkfs
 
-fs.img: mkfs
+fs.img: mkfs $(UPROGS)
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
-	./mkfs
-
+	./mkfs fs.img $(UPROGS)
 
 
 $U/initcode.out: $U/initcode.c $U/initcode.ld

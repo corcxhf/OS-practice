@@ -15,6 +15,7 @@
 #define SYS_wait 3
 #define SYS_getpid 11
 #define SYS_sbrk 12
+#define SYS_exec 13
 
 #define SYS_open 15
 #define SYS_write 16

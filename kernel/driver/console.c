@@ -8,7 +8,8 @@ static void consputc(int c) { uart_putc((char)c); }
 static char cons_buffer[CONS_BUF_SIZE];
 static int cons_head = 0; // 读指针
 static int cons_tail = 0; // 写指针
-
+int stdin_line_len = 0;
+int esc_state = 0;
 void printint(long xx, int base, int sign)
 {
   char buf[64];
@@ -159,20 +160,27 @@ void console_print_char(int c)
     break;
   }
 }
-
 void consoleintr(int c)
 {
-  console_print_char(c);
+  if (c == '\r')
+    c = '\n';
 
+  // 🚨 铁律：内核只负责收件，绝对不准调用 consputc 物理回显任何字符！
   int next_tail = (cons_tail + 1) % CONS_BUF_SIZE;
   if (next_tail != cons_head)
   {
-    if (c == '\r')
-      c = '\n';
     cons_buffer[cons_tail] = c;
     cons_tail = next_tail;
+
+    // 遇到回车、退格或转义，统统唤醒 Shell 让上层实时处理
+    if (c == '\n' || c == 0x7f || c == '\b' || c == 27)
+    {
+      extern void wakeup(void *);
+      wakeup(&cons_buffer);
+    }
   }
 }
+
 int consgetc(void)
 {
   while (cons_head == cons_tail)

@@ -88,30 +88,126 @@ void main()
     {
         syscall(SYS_write, 1, p_prompt, 8);
         buf_idx = 0;
+        buf_idx = 0;
+        int cursor = 0;
+        int shell_esc_state = 0;
+        const char c_left[] = {27, '[', 'D'};
+        const char c_right[] = {27, '[', 'C'};
+
         while (1)
         {
-            int n = syscall(SYS_read, 0, (uint64)(buf + buf_idx), 1);
+            char c;
+            int n = syscall(SYS_read, 0, (uint64)&c, 1);
             if (n <= 0)
                 continue;
 
-            char current_char = buf[buf_idx];
-            if (current_char == '\n')
+            if (c == 27)
+            {
+                shell_esc_state = 1;
+                continue;
+            }
+            if (shell_esc_state == 1 && c == '[')
+            {
+                shell_esc_state = 2;
+                continue;
+            }
+            if (shell_esc_state == 2)
+            {
+                shell_esc_state = 0;
+
+                if (c == 'D')
+                {
+                    if (cursor > 0)
+                    {
+                        cursor--;
+                        syscall(SYS_write, 1, (uint64)c_left, 3);
+                    }
+                }
+                else if (c == 'C')
+                {
+                    if (cursor < buf_idx)
+                    {
+                        cursor++;
+                        syscall(SYS_write, 1, (uint64)c_right, 3);
+                    }
+                }
+                // 'A' 和 'B' (上下键) 依然直接吞掉
+                continue;
+            }
+            if (shell_esc_state != 0 && c != 27 && c != '[')
+            {
+                shell_esc_state = 0;
+            }
+            if (c == '\n')
             {
                 buf[buf_idx] = '\0';
+                syscall(SYS_write, 1, p_newline, 1);
                 break;
             }
-            else if (current_char == 127 || current_char == '\b')
+
+            else if (c == 127 || c == '\b')
             {
-                if (buf_idx > 0)
+                // 只有当光标不在行首（左侧有字可删）时才处理
+                if (cursor > 0)
+                {
+                    int move_len = buf_idx - cursor; // 需要向前平移的字符数
+
+                    // A. 账本同步：数据结构向前挤压
+                    for (int i = 0; i < move_len; i++)
+                    {
+                        buf[cursor - 1 + i] = buf[cursor + i];
+                    }
+                    cursor--;
                     buf_idx--;
+
+                    // B. 屏幕动态渲染魔法：
+                    // 1. 先把光标往左退一格
+                    syscall(SYS_write, 1, (uint64)c_left, 3);
+                    // 2. 刷新打印光标后面所有挪过来的字符
+                    if (move_len > 0)
+                    {
+                        syscall(SYS_write, 1, (uint64)(buf + cursor), move_len);
+                    }
+                    // 3. 打印一个空格，把屁股后面多出来的那个历史残留字符擦掉
+                    char space = ' ';
+                    syscall(SYS_write, 1, (uint64)&space, 1);
+
+                    for (int i = 0; i < move_len + 1; i++)
+                    {
+                        syscall(SYS_write, 1, (uint64)c_left, 3);
+                    }
+                }
             }
+
             else
             {
                 if (buf_idx < 127)
+                {
+                    int move_len = buf_idx - cursor; // 需要向后腾出位置的字符数
+
+                    // A. 账本同步：从后往前倒车，空出 cursor 这个座位
+                    for (int i = move_len - 1; i >= 0; i--)
+                    {
+                        buf[cursor + 1 + i] = buf[cursor + i];
+                    }
+
+                    // 塞入新键盘字符
+                    buf[cursor] = c;
                     buf_idx++;
+
+                    // B. 屏幕动态渲染魔法：
+                    // 1. 打印当前插入的字符，以及后面所有被挤向后方的字符
+                    syscall(SYS_write, 1, (uint64)(buf + cursor), move_len + 1);
+
+                    cursor++; // 游标前进
+
+                    for (int i = 0; i < move_len; i++)
+                    {
+                        syscall(SYS_write, 1, (uint64)c_left, 3);
+                    }
+                }
             }
         }
-
         if (buf_idx == 0)
             continue;
 
@@ -119,39 +215,43 @@ void main()
         if (argc == 0)
             continue;
 
-        if (str_cmp(buf, "help") == 0)
-        {
-            int len = str_len((const char *)p_help);
-            syscall(SYS_write, 1, p_help, len);
-        }
-        else if (str_cmp(buf, "clear") == 0)
+        // 2. 依然保留一些不需要 fork 的内建命令（比如 clear）
+        if (str_cmp(argv[0], "clear") == 0)
         {
             syscall(SYS_write, 1, p_clear, 7);
+            continue;
         }
-        else if (str_cmp(argv[0], "echo") == 0)
+
+        // 3. 凡是外部磁盘命令（如 echo），果断祭出 Unix 三连击！
+        int pid = syscall(SYS_fork, 0, 0, 0);
+
+        if (pid < 0)
         {
-            if (argc == 1)
-            {
-                char echo_usage[] = "Echo what?\n";
-                syscall(SYS_write, 1, (uint64)echo_usage, str_len(echo_usage));
-            }
-            else
-            {
-                for (int i = 1; i < argc; i++)
-                {
-                    syscall(SYS_write, 1, (uint64)argv[i], str_len(argv[i]));
-                    if (i < argc - 1)
-                    {
-                        char space[] = " ";
-                        syscall(SYS_write, 1, (uint64)space, 1);
-                    }
-                }
-                syscall(SYS_write, 1, p_newline, 1);
-            }
+            char fork_err[] = "Fork failed!\n";
+            syscall(SYS_write, 1, (uint64)fork_err, str_len(fork_err));
+        }
+        else if (pid == 0)
+        {
+            // =====================================================
+            // 【子进程分支 (Child)】
+            // =====================================================
+            // SYS_exec 需要 2 个参数：路径和 argv 数组。最后一个 a2 补 0
+            syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
+
+            // 如果执行到这里，说明 exec 依然失败了
+            char exec_err[] = "exec failed!\n";
+            syscall(SYS_write, 1, (uint64)exec_err, str_len(exec_err));
+            syscall(SYS_exit, -1, 0, 0);
         }
         else
-            syscall(SYS_write, 1, p_unknown, 30);
-        
+        {
+            // =====================================================
+            // 【父进程分支 (Shell 本尊)】
+            // =====================================================
+            int status;
+            // SYS_wait 需要 1 个参数：接收状态的内核/用户指针。后面两个 a1, a2 补 0
+            syscall(SYS_wait, (uint64)&status, 0, 0);
+        }
     }
 }
 

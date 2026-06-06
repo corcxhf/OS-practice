@@ -17,11 +17,12 @@
 
 /* 声明 sys_trap_vector 汇编入口（在 kernelvec.S 中定义）*/
 extern char sys_trap_vector[];
+extern pagetable_t kernel_pagetable;
 extern void plicinit(void);
 extern void plicinithart(void);
 extern void uservec();
 extern void consoleintr(int);
-extern void userret(uint64);
+extern void userret(uint64, uint64);
 extern void virtio_disk_intr();
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
@@ -146,24 +147,13 @@ void usertrap(void)
     w_stvec((uint64)sys_trap_vector);
     p->trapframe->epc += 4;
     intr_on();
-    // printf("syscal [%d] from [%s] [pid = %d] \n", p->trapframe->a7, p->name, p->pid);
 
     syscall();
     usertrapret();
-
-    /* ================================================================
-     * TODO [Lab6-任务2]：
-     *   将被打断的 PC（sepc）向后移动 4 字节，跳过 ecall 指令。
-     *   需要通过 myproc()->trapframe->epc 访问该字段并对其加 4。
-     *   如不执行此步，返回后用户态会无限重复执行 ecall！
-     * ================================================================ */
-
-    /* 分发给系统调用处理函数 */
   }
   else if (cause == 0x8000000000000001L)
   {
     w_sip(r_sip() & ~2);
-    // printf("USER TICK FROM %d\n", myproc()->pid);
     yield();
     usertrapret();
   }
@@ -191,6 +181,23 @@ void usertrap(void)
   }
   else
   {
+    if (cause == 12)
+    {
+      struct proc *p = myproc();
+      printf("\nPID = [%d]", p->pid);
+      printf("\n 触发 Instruction Page Fault (cause = 12)\n");
+
+      // sepc: CPU 案发时，正试图执行哪里的指令？
+      printf("出事地址 (sepc) : 0x%lx\n", r_sepc());
+
+      // stval: 硬件尝试访问却失败的虚拟地址（通常等于 sepc）
+      printf("失败地址 (stval): 0x%lx\n", r_stval());
+
+      // 查看我们分配给 userinit 的代码地址
+      printf("预期的 initcode : 0x%lx\n", p->trapframe->epc);
+
+      panic("Instruction Page Fault"); // 抓到现场后停机保护
+    }
     if (cause == 15)
     {
       printf("\n[FATAL] Store Page Fault!\n");
@@ -198,8 +205,6 @@ void usertrap(void)
       printf("stval (报错地址) = %p\n", r_stval());
       panic("scause 15");
     }
-    /* 用户态发生异常（如非法内存访问），直接终止该进程 */
-    printf("usertrap: unexpected scause=%ld\n", cause);
     /* 理想情况下应该 exit(-1) 杀死该进程，暂不实现 */
     panic("usertrap");
   }
@@ -208,16 +213,28 @@ void usertrapret()
 {
   intr_off();
   struct proc *p = myproc();
+
+  // 1. 设置陷入入口
   w_stvec((uint64)uservec);
+
+  // 2. 备好内核物资，供 uservec 进来的时候换装
   p->trapframe->kernel_sp = p->kstack + PGSIZE;
   p->trapframe->kernel_trap = (uint64)usertrap;
+  p->trapframe->kernel_satp = (8ULL << 60) | (((uint64)kernel_pagetable) >> 12);
 
+  // 🚨 核心锁死：把当前进程 trapframe 的地址刻进 sscratch！
+  // 因为我们在 proc_pagetable 里把它恒等映射了，这个地址在内核态和用户态通用！
   w_sscratch((uint64)p->trapframe);
 
+  // 3. 准备好特权级控制寄存器
   w_sstatus((r_sstatus() & ~SSTATUS_SPP) | SSTATUS_SPIE);
   w_sepc(p->trapframe->epc);
-  // printf("USERTRAP : sepc = %ld\n", p->trapframe->epc);
 
-  userret((uint64)p->trapframe);
-  // __asm__ volatile("sret");
+  // 4. 冲刷缓存
+  __asm__ volatile("sfence.vma");
+  __asm__ volatile("fence.i");
+
+  // 5. 算出当前进程私有页表的 satp 格式，双参数调用传给汇编
+  uint64 satp = (8ULL << 60) | (((uint64)p->pagetable) >> 12);
+  userret((uint64)p->trapframe, satp);
 }
