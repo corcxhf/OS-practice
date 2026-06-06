@@ -25,18 +25,22 @@ extern uint64 sys_read(void);
 extern uint64 sys_close(void);
 extern uint64 sys_exec(void);
 extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
+extern uint64 sys_fstat(void);
+extern uint64 sys_mkdir(void);
 // extern uint64 sys_wait(void);
 
-static uint64 (*syscalls[20])(void) = {
+static uint64 (*syscalls[30])(void) = {
     [SYS_getpid] = sys_getpid,
     [SYS_exit] = sys_exit,
     [SYS_fork] = sys_fork,
     [SYS_write] = sys_write,
     [SYS_wait] = sys_wait,
     [SYS_exec] = sys_exec,
-    [SYS_open] sys_open,
-    [SYS_read] sys_read,
-    [SYS_close] sys_close,
+    [SYS_open] = sys_open,
+    [SYS_read] = sys_read,
+    [SYS_close] = sys_close,
+    [SYS_fstat] = sys_fstat,
+    [SYS_mkdir] = sys_mkdir,
 };
 
 /* ================================================================

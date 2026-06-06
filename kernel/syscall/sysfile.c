@@ -6,18 +6,6 @@
 #include "fs.h"
 #include "types.h"
 
-#ifndef O_CREAT
-#define O_CREAT 0x200
-#endif
-#ifndef O_WRONLY
-#define O_WRONLY 0x001
-#endif
-#ifndef O_RDONLY
-#define O_RDONLY 0x000
-#endif
-#ifndef O_RDWR
-#define O_RDWR 0x002
-#endif
 
 // /* 文件系统布局参数 */
 // #define BSIZE 1024                       /* 磁盘块大小（字节）*/

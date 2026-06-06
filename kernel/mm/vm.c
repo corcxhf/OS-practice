@@ -207,6 +207,34 @@ void *memcpy(void *dst, const void *src, unsigned long n)
   return memmove(dst, src, n);
 }
 
+// 💡 正统的内核->用户态安全搬运工
+int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
+{
+  uint64 n, va0, pa0;
+  while (len > 0)
+  {
+    va0 = PGROUNDDOWN(dstva);             // 算出用户虚拟地址所在的页边界
+    pte_t *pte = walk(pagetable, va0, 0); // 用用户进程的页表查物理地址
+
+    if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+      return -1; // 不合法或者没权限，直接拒绝
+
+    pa0 = PTE2PA(*pte);         // 拿到真实的物理页
+    n = PGSIZE - (dstva - va0); // 算出这页还能写多少字节
+    if (n > len)
+      n = len;
+
+    // 算出内核能直接访问的高端指针，安全拷贝！
+    char *kernel_dst = (char *)(pa0 + (dstva - va0));
+    memmove(kernel_dst, src, n); // 此时 kernel_dst 是高端地址，绝对安全！
+
+    len -= n;
+    src += n;
+    dstva += n;
+  }
+  return 0;
+}
+
 int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;

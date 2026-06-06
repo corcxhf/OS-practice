@@ -132,6 +132,6 @@ int dirlink(struct inode *dp, char *name, uint inum);
 struct inode *namei(char *path);
 struct inode *nameiparent(char *path, char *name);
 
-
+int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len);
 
 #endif /* DEFS_H */

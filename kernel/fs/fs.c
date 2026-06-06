@@ -17,7 +17,9 @@
 #include "riscv.h"
 #include "types.h"
 #include "fs.h"
+#include "proc.h"
 extern void virtio_disk_init(void);
+extern int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len);
 
 /* 磁盘上的 inode 结构（存储在磁盘上的格式）*/
 
@@ -149,13 +151,24 @@ int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
     if (m > n - tot)
       m = n - tot;
 
-    memcpy((void *)dst, bp->data + off % BSIZE, m);
     /* ================================================================
-     * TODO [Lab7-任务2-步骤4]：
-     *   将 bp->data 中从 (off % BSIZE) 开始的 m 字节拷贝到目标地址 dst。
-     *   简化版：memcpy((void*)dst, bp->data + off % BSIZE, m)。
-     *   完整版需应对用户/内核地址空间差异，使用 copyout()。
+     * [Lab7-任务2-步骤4 修复]：
+     * 根据 user_dst 决定是走上帝视角的 copyout，还是内核物理直写
      * ================================================================ */
+    if (user_dst)
+    {
+      // 目标是用户态地址，调用查表搬运工，防止 scause=15 暴毙
+      if (copyout(myproc()->pagetable, dst, (char *)(bp->data + off % BSIZE), m) < 0)
+      {
+        brelse(bp);
+        break; // 拷贝失败（如越界或权限错误），释放磁盘块并提前结束
+      }
+    }
+    else
+    {
+      // 目标是内核态地址（比如读文件系统元数据），直接搬运
+      memmove((void *)dst, bp->data + off % BSIZE, m);
+    }
 
     brelse(bp);
   }
@@ -560,4 +573,13 @@ struct inode *nameiparent(char *path, char *name)
   if (ip)
     iput(ip);
   return 0;
+}
+
+void stati(struct inode *ip, struct stat *st)
+{
+  st->dev = ip->dev;
+  st->ino = ip->inum;
+  st->type = ip->type;
+  st->nlink = ip->nlink;
+  st->size = ip->size;
 }

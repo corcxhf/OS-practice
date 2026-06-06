@@ -55,8 +55,12 @@ ULIB = \
     $U/usys.o
 
 UPROGS = \
-    $U/echo
-    # $U/_ls
+    $U/echo \
+    $U/ls \
+    $U/cat \
+    $U/touch \
+    $U/mkdir \
+    $U/clear
 
 $U/%.o: $U/%.c
 	$(CC) $(CFLAGS) -c $< -o $@

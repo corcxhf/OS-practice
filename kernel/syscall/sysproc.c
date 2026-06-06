@@ -12,6 +12,7 @@
 #include "riscv.h"
 #include "types.h"
 #include "elf.h"
+#include "fs.h"
 
 extern struct cpu *mycpu(void);
 extern void *memset(void *dst, int v, unsigned long n);
@@ -40,6 +41,7 @@ extern void ilock(struct inode *);
 extern int fetchaddr(uint64 addr, uint64 *ip);
 extern int fetchstr(uint64 s, char *dst, int max);
 extern int strlen(const char *s);
+extern int filestat(struct file *f, uint64 addr);
 /* ================================================================
  * sys_getpid — 返回当前进程的 PID
  *
@@ -230,10 +232,6 @@ uint64 sys_fork(void)
   np->context.sp = np->kstack + PGSIZE;
   np->context.ra = (uint64)forkret;
 
-  // =======================================================================
-  // 🚨 核心改造一：调用工厂，为子进程创建它专属的独立页表宇宙！
-  // 这个工厂在内部已经帮子进程把 np->trapframe 映射进 np->pagetable 了！
-  // =======================================================================
   np->pagetable = proc_pagetable(np);
   if (np->pagetable == 0)
   {
@@ -245,17 +243,8 @@ uint64 sys_fork(void)
     return -1;
   }
 
-  // 4. 正式拷贝 Trapframe 上下文（克隆父进程的用户态寄存器现场）
-  // 此时 np->trapframe 已经是通过 allocproc 分配好的干净物理页
   *np->trapframe = *p->trapframe;
-
-  // 5. 子进程在用户态的 fork 返回值必须设为 0
   np->trapframe->a0 = 0;
-
-  // =======================================================================
-  // 🚨 核心改造二：深度克隆用户内存 (uvmcopy)
-  // 把父进程私有宇宙的代码、数据、栈，一页一页物理拷贝并映射给子进程的新页表
-  // =======================================================================
 
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0)
   {
@@ -520,4 +509,94 @@ bad:
     // end_op();
   }
   return -1;
+}
+
+uint64 sys_fstat(void)
+{
+  struct file *f;
+  uint64 st; // 用户传进来的结构体虚拟地址
+  int fd;
+
+  // 1. 获取参数 fd 和 用户地址 st
+  if (argint(0, &fd) < 0 || argaddr(1, &st) < 0)
+    return -1;
+
+  // 2. 检查 fd 合法性，拿到文件结构体
+  if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+    return -1;
+
+  // 3. 调用底层的 filestat 获取信息
+  return filestat(f, st);
+}
+
+uint64 sys_mkdir(void)
+{
+  char path[MAXPATH];
+  char name[DIRSIZ];
+  struct inode *dp;
+  struct inode *ip;
+
+  /* 1. 从 trapframe 读取路径参数 */
+  if (argstr(0, path, MAXPATH) < 0)
+    return -1;
+
+  /* 2. 调用 nameiparent() 分离出父目录路径 dp 和要创建的目录名 name */
+  if ((dp = nameiparent(path, name)) == 0)
+    return -1;
+
+  ilock(dp);
+
+  /* 3. 在父目录中查找是否已存在同名条目（防重名） */
+  if ((ip = dirlookup(dp, name, 0)) != 0)
+  {
+    /* 若已存在同名文件或目录，创建失败 */
+    iunlockput(dp);
+    ilock(ip);
+    iunlockput(ip); // 释放 dirlookup 增加的引用计数与锁
+    return -1;
+  }
+
+  /* 4. 若不存在：分配新 inode，注意此处类型是 T_DIR */
+  if ((ip = ialloc(dp->dev, T_DIR)) == 0)
+  {
+    iunlockput(dp);
+    return -1;
+  }
+
+  ilock(ip);
+
+  /* 5. 初始化新目录的链接数 */
+  // 自身初始为 2 (父目录的条目 + 自身的 ".")
+  ip->nlink = 2;
+
+  /* 6. 核心连招：在新目录内部写入 "." 和 ".." 两个拓扑锚点 */
+  // "." 指向新目录自己 (ip->inum)
+  // ".." 指向父目录 (dp->inum)
+  if (dirlink(ip, ".", ip->inum) < 0 || dirlink(ip, "..", dp->inum) < 0)
+  {
+    iunlockput(ip);
+    iunlockput(dp);
+    return -1;
+  }
+
+  /* 7. 将新目录的名字和号注册到父目录中 */
+  if (dirlink(dp, name, ip->inum) < 0)
+  {
+    iunlockput(ip);
+    iunlockput(dp);
+    return -1;
+  }
+
+  /* 8. 父目录的链接数加 1 (因为子目录里的 ".." 正深深地看着它) */
+  dp->nlink++;
+
+  /* 9. 将新目录和父目录的最新状态同步到磁盘 */
+  iupdate(dp);
+  iupdate(ip);
+
+  /* 10. 功成身退，释放父子目录的锁和引用 */
+  iunlockput(dp);
+  iunlockput(ip);
+
+  return 0;
 }

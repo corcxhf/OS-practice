@@ -21,6 +21,8 @@
 #define SYS_write 16
 #define SYS_read 17
 #define SYS_close 18
+#define SYS_fstat 19
+#define SYS_mkdir 20
 
 /* ================================================================
  * 进程状态枚举

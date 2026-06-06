@@ -1,4 +1,4 @@
-#include "defs.h"
+// #include "defs.h"
 #include "memlayout.h"
 #include "param.h"
 #include "riscv.h"
@@ -14,6 +14,19 @@
 #define FD_PIPE 1
 #define FD_INODE 2
 #define FD_DEVICE 3
+
+#ifndef O_CREAT
+#define O_CREAT 0x200
+#endif
+#ifndef O_WRONLY
+#define O_WRONLY 0x001
+#endif
+#ifndef O_RDONLY
+#define O_RDONLY 0x000
+#endif
+#ifndef O_RDWR
+#define O_RDWR 0x002
+#endif
 
 struct superblock
 {
@@ -74,4 +87,13 @@ struct dinode
     short nlink;             /* 硬链接计数 */
     uint size;               /* 文件大小（字节数）*/
     uint addrs[NDIRECT + 1]; /* 数据块地址：前 NDIRECT 个是直接，最后一个是一级间接 */
+};
+
+struct stat
+{
+    int dev;     // 文件所在磁盘的设备号
+    uint ino;    // Inode 编号 (相当于文件的身份证号)
+    short type;  // 文件类型 (T_DIR, T_FILE 等)
+    short nlink; // 硬链接数量
+    uint64 size; // 文件大小（字节数）
 };

@@ -10,6 +10,10 @@
 #define NDIRECT 12
 #define DIRSIZ 14
 // 1. 超级块结构
+#define T_DIR 1    /* 目录文件 (Directory) */
+#define T_FILE 2   /* 普通文件 (Regular file) */
+#define T_DEVICE 3 /* 设备文件 (Device, 如串口或磁盘) */
+
 struct superblock
 {
     uint magic;      // 魔数，文件系统类型验证码（必须 == FSMAGIC，验证这确实是
@@ -116,7 +120,7 @@ int main(int argc, char *argv[])
         // 初始化这个文件自己的 Inode
         struct dinode fin;
         memset(&fin, 0, sizeof(fin));
-        fin.type = 1; // T_FILE (普通文件)
+        fin.type = T_FILE; // T_FILE (普通文件)
         fin.nlink = 1;
         fin.size = 0;
 
@@ -153,7 +157,7 @@ int main(int argc, char *argv[])
     // [4] 写入根目录的 Inode
     struct dinode root_inode;
     memset(&root_inode, 0, sizeof(root_inode));
-    root_inode.type = 1; // T_DIR
+    root_inode.type = T_DIR; // T_DIR
     root_inode.nlink = 1;
     root_inode.size = de_count * sizeof(struct dirent); // 动态计算根目录大小
     root_inode.addrs[0] = 46;
