@@ -27,11 +27,6 @@ extern void release(struct spinlock *lk);
 /* 内存中的 inode（缓存版，包含磁盘版本和额外运行时信息）*/
 
 /* 目录项结构（目录文件中每一条记录的格式）*/
-struct dirent
-{
-  ushort inum;       /* 该条目对应的 inode 编号（0 表示空洞/已删除）*/
-  char name[DIRSIZ]; /* 文件名（最多 14 字符，不含 '\0'）*/
-};
 
 struct
 {
@@ -606,4 +601,24 @@ void stati(struct inode *ip, struct stat *st)
   st->type = ip->type;
   st->nlink = ip->nlink;
   st->size = ip->size;
+}
+
+int strncmp(const char *p, const char *q, uint n)
+{
+  while (n > 0 && *p && *p == *q)
+  {
+    n--;
+    p++;
+    q++;
+  }
+  if (n == 0)
+    return 0;
+  return (unsigned char)*p - (unsigned char)*q;
+}
+
+// 专门用于比对文件名的 namecmp
+// DIRSIZ 通常在 fs.h 中定义，比如 #define DIRSIZ 14
+int namecmp(const char *s, const char *t)
+{
+  return strncmp(s, t, DIRSIZ);
 }

@@ -3,6 +3,7 @@
 #include "param.h"
 #include "riscv.h"
 #include "types.h"
+#include "proc.h"
 
 #define FSMAGIC 0x10203040
 #define ROOTINO 1
@@ -15,6 +16,8 @@
 #define FD_INODE 2
 #define FD_DEVICE 3
 #define FD_CONSOLE 4
+
+#define PIPESIZE 512
 
 #ifndef O_CREAT
 #define O_CREAT 0x200
@@ -45,10 +48,11 @@ extern struct superblock sb;
 
 struct file
 {
-    int type;         // FD_NONE=0, FD_INODE=1（本实验先只支持 inode 文件）
-    int ref;          // 引用计数（fork 后父子共享时 ref==2）
-    char readable;    // 是否可读
-    char writable;    // 是否可写
+    int type;      // FD_NONE=0, FD_INODE=1（本实验先只支持 inode 文件）
+    int ref;       // 引用计数（fork 后父子共享时 ref==2）
+    char readable; // 是否可读
+    char writable; // 是否可写
+    struct pipe *pipe;
     struct inode *ip; // 对应的 inode（type==FD_INODE 时有效）
     uint off;         // 当前读写偏移（字节）
 }; // 全局文件表（系统中所有打开的文件对象）
@@ -80,6 +84,12 @@ struct inode
     uint addrs[NDIRECT + 1];
 };
 
+struct dirent
+{
+    unsigned short inum; // inode 编号
+    char name[14];       // 文件名
+};
+
 struct dinode
 {
     short type;              /* 文件类型（0=空闲, 1=普通文件, 2=目录, 3=设备）*/
@@ -97,4 +107,14 @@ struct stat
     short type;  // 文件类型 (T_DIR, T_FILE 等)
     short nlink; // 硬链接数量
     uint64 size; // 文件大小（字节数）
+};
+
+struct pipe
+{
+    struct spinlock lock;
+    char data[PIPESIZE];
+    uint nread;    // 已经读取的总字节数
+    uint nwrite;   // 已经写入的总字节数
+    int readopen;  // 读端是否还打开着 (0或1)
+    int writeopen; // 写端是否还打开着 (0或1)
 };

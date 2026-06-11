@@ -242,22 +242,23 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uint64 flags;
   char *mem;
 
-  // 获取当前子进程和父进程的核心生命通道边界（物理/虚拟地址）
-  // 确保拷贝时把它们当成禁区保护起来
+  // 🚨 暂时停用防火墙，防止高位地址计算发生溢出或误伤
+  /*
   uint64 trapframe_va = PGROUNDDOWN((uint64)myproc()->trapframe);
   uint64 userret_va = PGROUNDDOWN((uint64)userret);
+  */
 
   for (i = 0; i < sz; i += PGSIZE)
   {
-    // 🚨 终极防火墙：如果当前遍历到的虚拟地址是 trapframe 或者 userret 的特殊页面
-    // 证明工厂在创建进程时已经独立映射过了，子进程不需要、也绝对不能重复拷贝！直接跳过！
+    /*
     if (i == trapframe_va || i == userret_va)
     {
       continue;
     }
+    */
 
     if ((pte = walk(old, i, 0)) == 0)
-      continue; // 如果父进程这页本来就是空的，直接跳过
+      continue; 
     if ((*pte & PTE_V) == 0)
       continue;
 
@@ -268,7 +269,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       goto err;
     memmove(mem, (char *)pa, PGSIZE);
 
-    // 严丝合缝的参数顺序
     if (mappages(new, (uint64)mem, i, PGSIZE, flags) < 0)
     {
       kfree(mem);
@@ -280,7 +280,6 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 err:
   return -1;
 }
-
 uint64 walkaddr(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;

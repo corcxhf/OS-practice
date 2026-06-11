@@ -16,6 +16,7 @@ extern void ilock(struct inode *ip);
 extern int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n);
 extern void iunlock(struct inode *ip);
 extern void stati(struct inode *ip, struct stat *st);
+extern void pipeclose(struct pipe *pi, int writable);
 struct file *filealloc()
 {
     struct file *f;
@@ -57,21 +58,21 @@ struct file *filedup(struct file *f)
 
 void fileclose(struct file *f)
 {
+    struct file f_copy = *f;
     if (f->ref < 1)
         panic("fileclose");
     if (--f->ref > 0)
         return; // 如果还有人在用，直接返回
-
-    // ==========================================================
-    // 🚨 核心修复：只有文件类型是 INODE 时，才去释放 Inode！
-    // ==========================================================
     if (f->type == FD_INODE)
         iput(f->ip);
     else if (f->type == FD_CONSOLE)
     {
     }
-
-    f->type = 0; // 或者你定义的 FD_NONE
+    else if (f_copy.type == FD_PIPE)
+    {
+        pipeclose(f_copy.pipe, f_copy.writable);
+    }
+    f->type = 0;
     f->ip = 0;
     f->off = 0;
 }

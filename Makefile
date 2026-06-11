@@ -60,7 +60,9 @@ UPROGS = \
     $U/cat \
     $U/touch \
     $U/mkdir \
-    $U/clear
+    $U/clear \
+    $U/rm 
+#     $U/testpipe \
 
 $U/%.o: $U/%.c
 	$(CC) $(CFLAGS) -c $< -o $@

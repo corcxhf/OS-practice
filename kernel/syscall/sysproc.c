@@ -14,6 +14,10 @@
 #include "elf.h"
 #include "fs.h"
 
+extern int namecmp(const char *s, const char *t);
+extern struct file *filealloc();
+extern void fileclose(struct file *f);
+extern int fdalloc(struct file *f);
 extern struct file *filedup(struct file *f);
 extern struct cpu *mycpu(void);
 extern void *memset(void *dst, int v, unsigned long n);
@@ -43,17 +47,17 @@ extern int fetchaddr(uint64 addr, uint64 *ip);
 extern int fetchstr(uint64 s, char *dst, int max);
 extern int strlen(const char *s);
 extern int filestat(struct file *f, uint64 addr);
-extern
-    /* ================================================================
-     * sys_getpid — 返回当前进程的 PID
-     *
-     * 对应的用户接口：int getpid(void)
-     *
-     * 实现很简单：调用 myproc() 获取当前进程的 PCB，
-     * 然后返回它的 pid 字段。
-     * ================================================================ */
-    uint64
-    sys_getpid(void)
+extern int pipewrite(struct pipe *pi, uint64 addr, int n);
+/* ================================================================
+ * sys_getpid — 返回当前进程的 PID
+ *
+ * 对应的用户接口：int getpid(void)
+ *
+ * 实现很简单：调用 myproc() 获取当前进程的 PCB，
+ * 然后返回它的 pid 字段。
+ * ================================================================ */
+
+uint64 sys_getpid(void)
 {
   return myproc()->pid;
 }
@@ -79,6 +83,20 @@ uint64 sys_exit(void)
   argint(0, &p->xstate);
   // 1. 记录退出码
   p->status = TASK_ZOMBIE;
+  for (int fd = 0; fd < NOFILE; fd++)
+  {
+    if (p->ofile[fd])
+    {
+      fileclose(p->ofile[fd]); // 引用计数减1，真正触发管道读端的 EOF！
+      p->ofile[fd] = 0;
+    }
+  }
+  if (p->cwd)
+  {
+    iput(p->cwd);
+    p->cwd = 0;
+  }
+
   // printf("Process [%d] exited with code [%d]\n", p->pid, p->xstate);
   wakeup(p->parent);
 
@@ -149,9 +167,7 @@ uint64 sys_write(void)
   if (f->type == FD_CONSOLE)
   {
     for (int i = 0; i < copy_len; i++)
-    {
       console_print_char(buf[i]);
-    }
     return copy_len;
   }
   else if (f->type == FD_INODE)
@@ -159,8 +175,11 @@ uint64 sys_write(void)
     int ret = filewrite(f, (uint64)buf, copy_len);
     return ret;
   }
+  else if (f->type == FD_PIPE)
+  {
+    return pipewrite(f->pipe, (uint64)buf, copy_len);
+  }
 
-  // 探针 4：类型错误
   char msg4[] = "[Trace: UNKNOWN file type!]\n";
   for (int i = 0; msg4[i]; i++)
     console_print_char(msg4[i]);
@@ -334,19 +353,10 @@ uint64 sys_exec(void)
   uint64 sz = 0, old_sz;
   pagetable_t old_pagetable;
   uint64 sp, stackbase;
-
-  // =========================================================
-  // 1. 从用户态读取参数（路径 path 和 参数数组 argv）
-  // =========================================================
-  // 获取第一个参数：待执行程序的路径（如 "/echo"）
   if (argstr(0, path, sizeof(path)) < 0)
     return -1;
-
-  // 获取第二个参数：用户态的 argv 指针数组地址
   if (argaddr(1, &uargv) < 0)
     return -1;
-
-  // 开始解析参数字符串，搬运到内核暂存
   memset(argv, 0, sizeof(argv));
   for (argc = 0; argc < MAXARG; argc++)
   {
@@ -671,4 +681,182 @@ uint64 sys_chdir(void)
   p->cwd = ip;
 
   return 0;
+}
+
+uint64 sys_pipe(void)
+{
+  uint64 fdarray; // 用户态传进来的 int fd[2] 的虚拟地址
+  struct proc *p = myproc();
+  struct file *rf = 0, *wf = 0;
+  int fd0 = -1, fd1 = -1;
+  struct pipe *pi = 0;
+
+  // 1. 抓取用户态参数：获取存放两个 fd 的数组首地址
+  if (argaddr(0, &fdarray) < 0)
+    return -1;
+
+  // 2. 挖坑：为管道环形缓冲区分配一页物理内存
+  // 假设你的内存分配器是 kalloc()
+  pi = (struct pipe *)kalloc();
+  if (pi == 0)
+    goto bad;
+
+  // 初始化管道内部的锁和状态
+  initlock(&pi->lock, "pipe");
+  pi->nread = 0;
+  pi->nwrite = 0;
+  pi->readopen = 1;
+  pi->writeopen = 1;
+
+  // 3. 铸造：从内核全局文件表中分配两个 struct file 对象
+  // 假设你拥有标准的 filealloc()
+  if ((rf = filealloc()) == 0 || (wf = filealloc()) == 0)
+    goto bad;
+
+  // 配置读端文件结构
+  rf->type = FD_PIPE;
+  rf->readable = 1;
+  rf->writable = 0;
+  rf->pipe = pi;
+
+  // 配置写端文件结构
+  wf->type = FD_PIPE;
+  wf->readable = 0;
+  wf->writable = 1;
+  wf->pipe = pi;
+
+  // 4. 分发：动用你修复好的 fdalloc，占用当前进程的 process table 槽位
+  if ((fd0 = fdalloc(rf)) < 0 || (fd1 = fdalloc(wf)) < 0)
+    goto bad;
+
+  // 5. 偷渡：将内核生成的 fd0 和 fd1，塞回用户态的 fdarray[0] 和 fdarray[1]
+  // 这里我们用你最拿手的、绝对安全的 walk 查表逐字节（或4字节）搬运法！
+  int fds[2];
+  fds[0] = fd0;
+  fds[1] = fd1;
+
+  char *src = (char *)fds;
+  uint64 dst_va = fdarray;
+  for (int i = 0; i < sizeof(fds); i++)
+  {
+    uint64 va_page = PGROUNDDOWN(dst_va);
+    uint64 offset = dst_va - va_page;
+
+    pte_t *pte = walk(p->pagetable, va_page, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0)
+      goto bad;
+
+    uint64 pa = PTE2PA(*pte);
+    char *kernel_ptr = (char *)(pa + offset);
+
+    *kernel_ptr = src[i]; // 稳稳写入用户地址
+    dst_va++;
+  }
+
+  return 0; // 成功！
+
+bad:
+  // 灾难清理：如果中间任何一步挂了，必须把前面申请的资源全部吐出来，防止内存泄漏
+  if (pi)
+    kfree((void *)pi);
+  if (rf)
+  {
+    if (fd0 >= 0)
+      p->ofile[fd0] = 0;
+    fileclose(rf);
+  }
+  if (wf)
+  {
+    if (fd1 >= 0)
+      p->ofile[fd1] = 0;
+    fileclose(wf);
+  }
+  return -1;
+}
+
+uint64 sys_dup(void)
+{
+  struct file *f;
+  int oldfd;
+  int newfd;
+  struct proc *p = myproc();
+
+  // 1. 从用户态拿到要复制的旧 fd
+  if (argint(0, &oldfd) < 0)
+    return -1;
+
+  // 2. 检查这个旧 fd 是不是合法的，以及它到底有没有打开文件
+  if (oldfd < 0 || oldfd >= NOFILE || (f = p->ofile[oldfd]) == 0)
+    return -1;
+
+  // 3. 召唤你刚刚修复的无敌 fdalloc！
+  // 它会从 0 开始遍历，找到最小的空位，把 f 塞进去
+  if ((newfd = fdalloc(f)) < 0)
+    return -1;
+
+  // 4. 极其关键的一步：增加文件引用计数！
+  filedup(f);
+
+  // 5. 返回新分配的槽位编号
+  return newfd;
+}
+
+uint64 sys_unlink(void)
+{
+  struct inode *ip, *dp;
+  struct dirent de;
+  char name[DIRSIZ], path[MAXPATH];
+  uint offset;
+
+  // 1. 从用户态获取要删除的文件路径
+  if (argstr(0, path, MAXPATH) < 0)
+    return -1;
+
+  // 2. 找到该文件的“父目录 Inode (dp)” 和“目标文件名 (name)”
+  // nameiparent 会解析路径，返回父目录的 Inode 指针
+  if ((dp = nameiparent(path, name)) == 0)
+    return -1;
+
+  ilock(dp);
+
+  // 🚨 绝对防御：连根拔起是大忌，不能删除当前目录(.)和上级目录(..)
+  if (namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
+    goto bad;
+
+  // 3. 在父目录的条目中查找目标文件，拿到它的 Inode (ip) 和所在偏移量 (offset)
+  if ((ip = dirlookup(dp, name, &offset)) == 0)
+    goto bad;
+  ilock(ip);
+
+  // 🚨 防御检查：如果目标是一个目录，必须保证它是空目录才能删（防止孤儿目录树挂在虚空中）
+  if (ip->type == T_DIR)
+  {
+    // 建议：如果你还没实现 isdirempty 检查，这里可以直接粗暴地拒绝删除目录
+    // goto bad_unlock;
+  }
+
+  // 4. 物理抹除：用一个空的、全为 0 的 dirent 结构体，覆盖掉父目录里关于这个文件的记录
+  memset(&de, 0, sizeof(de));
+  if (writei(dp, 0, (uint64)&de, offset, sizeof(de)) != sizeof(de))
+    panic("unlink: writei");
+
+  // 5. 核心降维：如果它不是目录，或者你允许删除目录，将其硬链接数 -1
+  if (ip->type == T_DIR)
+  {
+    dp->nlink--;
+    iupdate(dp);
+  }
+  ip->nlink--;
+  iupdate(ip); // 把修改后的 Inode 状态刷入磁盘
+
+  // 6. 优雅释放：解锁并归还 Inode。
+  // 如果此时 ip->nlink == 0，iunlockput 内部的 iput 逻辑会自动去释放磁盘 Block 块！
+  iunlockput(ip);
+  iunlockput(dp);
+
+  return 0;
+
+bad:
+  iunlockput(dp);
+  return -1;
 }

@@ -1,7 +1,12 @@
 #include <stdarg.h>
+#include "proc.h"
+#include "riscv.h"
+#include "fs.h"
+#include "types.h"
+
 #define CONS_BUF_SIZE 1024
 extern void uart_putc(char c);
-
+extern struct proc *myproc(void);
 static char digits[] = "0123456789abcdef";
 
 static void consputc(int c) { uart_putc((char)c); }
@@ -162,6 +167,22 @@ void console_print_char(int c)
 }
 void consoleintr(int c)
 {
+  if (c == 3)
+  {
+    struct proc *p = myproc();
+    // 如果当前触发中断的是用户进程（PID > 1，不要误杀你的 Shell 或者是 initcode！）
+    if (p && p->pid > 1)
+    {
+      p->killed = 1; // 🎯 标记追杀！
+
+      // 极其关键：万一这个进程现在正在 pipe 或者 console 里面睡觉呢？
+      // 必须立刻把它叫醒，让它感知到自己死期已到，否则它会一直睡死在内核里！
+      extern void wakeup(void *);
+      wakeup(p); // 或者是你内核通用的唤醒通道
+      return;    // 绝不准把 Ctrl+C 的字符塞进缓冲区，直接返回！
+    }
+  }
+
   if (c == '\r')
     c = '\n';
 
@@ -172,15 +193,12 @@ void consoleintr(int c)
     cons_buffer[cons_tail] = c;
     cons_tail = next_tail;
 
-    // 遇到回车、退格或转义，统统唤醒 Shell 让上层实时处理
-    if (c == '\n' || c == 0x7f || c == '\b' || c == 27)
-    {
-      extern void wakeup(void *);
-      wakeup(&cons_buffer);
-    }
+    // 🌟 核心修复：因为内核不回显，全靠用户态驱动
+    // 所以只要有任何一点风吹草动（任何字符），都必须立刻叫醒等待的进程（Shell 或 cat）
+    extern void wakeup(void *);
+    wakeup(&cons_buffer);
   }
 }
-
 int consgetc(void)
 {
   while (cons_head == cons_tail)

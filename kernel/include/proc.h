@@ -24,6 +24,9 @@
 #define SYS_fstat 19
 #define SYS_mkdir 20
 #define SYS_chdir 21
+#define SYS_pipe 22
+#define SYS_dup 23
+#define SYS_unlink 24
 /* ================================================================
  * 进程状态枚举
  * ================================================================ */

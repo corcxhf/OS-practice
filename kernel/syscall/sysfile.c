@@ -18,13 +18,18 @@ extern int argstr(int n, char *buf, int max);
 
 int argaddr(int n, uint64 *ap);
 extern int fileread(struct file *f, int n, char *buf);
+extern int piperead(struct pipe *pi, uint64 addr, int n);
 struct inode;
 extern void iunlockput(struct inode *ip);
 
 extern struct file *filealloc();
 extern void fileclose(struct file *f);
 extern int fdalloc(struct file *f);
+extern void wakeup(void *chan);
+extern void sleep(void *chan, struct spinlock *lk);
 
+extern void acquire(struct spinlock *);
+extern void release(struct spinlock *lk);
 uint64 sys_open(void)
 {
     char path[MAXPATH];
@@ -136,39 +141,27 @@ uint64 sys_read(void)
     struct file *f;
     int n, fd;
     uint64 addr;
-    struct proc *p = myproc(); // 获取当前进程
+    struct proc *p = myproc();
 
-    /* 1. 从 trapframe 读取参数 */
     if (argint(0, &fd) < 0 || argint(2, &n) < 0 || argaddr(1, &addr) < 0)
         return -1;
-
-    // ==========================================================
-    // 2. 🚨 核心前置校验：绝不盲目信任用户，查表！
-    // ==========================================================
-    if (fd < 0 || fd >= 16 || (f = p->ofile[fd]) == 0) // 假设 NOFILE 是 16
+    if (fd < 0 || fd >= NOFILE || (f = p->ofile[fd]) == 0)
         return -1;
 
-    // 检查这个文件是否允许读取
     if (f->readable == 0)
         return -1;
 
-    // ==========================================================
-    // 3. 🚨 多态路由：根据文件类型分发数据来源！
-    // ==========================================================
     if (f->type == FD_CONSOLE)
     {
-        // 来源：键盘
         uint64 user_addr = addr;
         int i;
 
         for (i = 0; i < n; i++)
         {
             extern int consgetc(void);
-            int c = consgetc(); // 这里可能会阻塞等键盘
+            int c = consgetc();
             if (c < 0)
                 break;
-
-            // --- 你极其硬核的手工 copyout 逻辑 ---
             uint64 va_page = PGROUNDDOWN(user_addr);
             uint64 offset = user_addr - va_page;
 
@@ -179,57 +172,167 @@ uint64 sys_read(void)
             uint64 pa = PTE2PA(*pte);
             char *kernel_ptr = (char *)(pa + offset);
 
-            *kernel_ptr = (char)c; // 安全写入物理内存
+            *kernel_ptr = (char)c;
             user_addr++;
-            // ----------------------------------
+            if (c == '\n')
+            {
+                i++; // 把当前这个 '\n' 算进成功读取的字节数里
+                break;
+            }
         }
-        return i; // 返回读取的字节数
+        return i;
     }
     else if (f->type == FD_INODE)
     {
-        // 来源：磁盘文件
-        // 假设你之前已经写好了 fileread 函数
         return fileread(f, n, (char *)addr);
     }
+    else if (f->type == FD_PIPE)
+    {
+        return piperead(f->pipe, addr, n);
+    }
 
-    return -1; // 未知设备类型
+    return -1;
 }
 uint64 sys_close(void)
 {
     int fd;
     struct file *f;
-    struct proc *p = myproc(); // 获取当前进程结构体
+    struct proc *p = myproc();
 
-    /* 1. 获取用户传入的第一个参数 fd */
-    /* 同时检查：fd 是否在合法范围 (0 ~ NOFILE) 且该槽位不为空 */
     if (argint(0, &fd) < 0 || fd < 0 || fd >= NOFILE || (f = p->ofile[fd]) == 0)
         return -1;
-
-    /* 2. 在进程的文件表中将该槽位清空 */
-    /* 这样该 fd 就可以在下次 open 时被重新分配 */
     p->ofile[fd] = 0;
-
-    /* 3. 调用文件层的通用关闭函数 */
-    /* fileclose 会负责处理 f->ref--，并在引用归零时释放 inode 或 pipe */
     fileclose(f);
-
     return 0;
 }
 
 int copyinstr(char *dst, uint64 src, int max)
 {
-    char *s = (char *)src; // 因为共用页表，直接强制转换指针
+    char *s = (char *)src;
     int i;
 
     for (i = 0; i < max; i++)
     {
         dst[i] = s[i];
-
-        // 如果遇到了字符串结束符，说明复制完成
         if (s[i] == '\0')
             return 0; // 成功
     }
-
-    // 如果遍历了 max 个字符还没遇到 \0，说明路径太长
     return -1;
+}
+
+int pipewrite(struct pipe *pi, uint64 addr, int n)
+{
+    int i = 0;
+    // 🚨 这里的 addr 其实是 sys_write 传进来的内核 buf 地址！
+    // 我们直接把它强转成普通的内核字符指针，不需要查表！
+    char *kernel_buf = (char *)addr;
+
+    acquire(&pi->lock);
+
+    while (i < n)
+    {
+        // 嫌疑点 A：如果读端全关了，写数据就没有任何意义了
+        if (pi->readopen == 0)
+        {
+            release(&pi->lock);
+            return -1;
+        }
+
+        // 嫌疑点 B：管道满了
+        if (pi->nwrite - pi->nread == PIPESIZE)
+        {
+            wakeup(&pi->nread);
+            sleep(&pi->nwrite, &pi->lock);
+        }
+        else
+        {
+            // 🚨 终极修复：直接从 kernel_buf 读取数据，写入管道环形缓冲区！
+            pi->data[pi->nwrite % PIPESIZE] = kernel_buf[i];
+            pi->nwrite++;
+            i++;
+        }
+    }
+
+    wakeup(&pi->nread);
+    release(&pi->lock);
+
+    return i;
+}
+
+int piperead(struct pipe *pi, uint64 addr, int n)
+{
+    int i = 0;
+    struct proc *p = myproc();
+
+    acquire(&pi->lock);
+
+    // 嫌疑点 A：管道是空的 (nwrite == nread)
+    while (pi->nwrite == pi->nread)
+    {
+        // 如果管道空了，且写端已经被全部 close 掉了
+        if (pi->writeopen == 0)
+        {
+            // 这就是真正的文件末尾 (EOF)，cat 读到 0 就会优雅退出
+            release(&pi->lock);
+            return 0;
+        }
+        // 如果写端没关，纯粹是还没来得及写数据，读端就睡在 pi->nread 上
+        wakeup(&pi->nwrite); // 顺手唤醒可能因为管满而卡住的写端
+        sleep(&pi->nread, &pi->lock);
+    }
+
+    // 2. 管道里有数据，开始读
+    while (i < n && pi->nwrite != pi->nread)
+    {
+        // 逐字节利用 walk 找到用户态传进来的接收缓冲区虚拟地址 addr + i
+        uint64 va_page = PGROUNDDOWN(addr + i);
+        uint64 offset = (addr + i) - va_page;
+
+        pte_t *pte = walk(p->pagetable, va_page, 0);
+        if (pte == 0 || (*pte & PTE_V) == 0)
+        {
+            release(&pi->lock);
+            return -1;
+        }
+        uint64 pa = PTE2PA(*pte);
+        char *user_ptr = (char *)(pa + offset);
+
+        // 从环形缓冲区中取出数据，写回用户态宇宙
+        *user_ptr = pi->data[pi->nread % PIPESIZE];
+        pi->nread++;
+        i++;
+    }
+
+    // 读完了，唤醒可能因为管满而卡住的写端
+    wakeup(&pi->nwrite);
+    release(&pi->lock);
+
+    return i; // 返回真正读到的字节数
+}
+
+void pipeclose(struct pipe *pi, int writable)
+{
+    acquire(&pi->lock);
+
+    if (writable)
+    {
+        pi->writeopen = 0;  // 🚨 宣告写端彻底死亡！
+        wakeup(&pi->nread); // 🚨 极其关键：必须叫醒正在死等的读端（比如 cat），让它起来看到 writeopen==0 并返回 0！
+    }
+    else
+    {
+        pi->readopen = 0;    // 宣告读端死亡
+        wakeup(&pi->nwrite); // 叫醒可能因为管子满了卡住的写端
+    }
+
+    // 如果读写两端都死透了，彻底释放管道这页物理内存
+    if (pi->readopen == 0 && pi->writeopen == 0)
+    {
+        release(&pi->lock);
+        kfree((void *)pi); // 回收内存
+    }
+    else
+    {
+        release(&pi->lock);
+    }
 }

@@ -28,6 +28,9 @@ extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
 extern uint64 sys_fstat(void);
 extern uint64 sys_mkdir(void);
 extern uint64 sys_chdir(void);
+extern uint64 sys_pipe(void);
+extern uint64 sys_dup(void);
+extern uint64 sys_unlink(void);
 // extern uint64 sys_wait(void);
 
 static uint64 (*syscalls[30])(void) = {
@@ -43,6 +46,9 @@ static uint64 (*syscalls[30])(void) = {
     [SYS_fstat] = sys_fstat,
     [SYS_mkdir] = sys_mkdir,
     [SYS_chdir] = sys_chdir,
+    [SYS_pipe] = sys_pipe,
+    [SYS_dup] = sys_dup,
+    [SYS_unlink] = sys_unlink,
 };
 
 /* ================================================================
