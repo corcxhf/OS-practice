@@ -14,12 +14,13 @@
 #include "elf.h"
 #include "fs.h"
 
+extern struct file *filedup(struct file *f);
 extern struct cpu *mycpu(void);
 extern void *memset(void *dst, int v, unsigned long n);
 extern void *memmove(void *dest, const void *src, unsigned long n);
 extern void consoleintr(int);
 extern void console_print_char(char);
-
+struct inode *idup(struct inode *ip);
 extern int argint(int, int *);
 extern int argaddr(int, uint64 *);
 extern int argstr(int, char *, int);
@@ -42,15 +43,17 @@ extern int fetchaddr(uint64 addr, uint64 *ip);
 extern int fetchstr(uint64 s, char *dst, int max);
 extern int strlen(const char *s);
 extern int filestat(struct file *f, uint64 addr);
-/* ================================================================
- * sys_getpid — 返回当前进程的 PID
- *
- * 对应的用户接口：int getpid(void)
- *
- * 实现很简单：调用 myproc() 获取当前进程的 PCB，
- * 然后返回它的 pid 字段。
- * ================================================================ */
-uint64 sys_getpid(void)
+extern
+    /* ================================================================
+     * sys_getpid — 返回当前进程的 PID
+     *
+     * 对应的用户接口：int getpid(void)
+     *
+     * 实现很简单：调用 myproc() 获取当前进程的 PCB，
+     * 然后返回它的 pid 字段。
+     * ================================================================ */
+    uint64
+    sys_getpid(void)
 {
   return myproc()->pid;
 }
@@ -99,38 +102,70 @@ uint64 sys_exit(void)
 uint64 sys_write(void)
 {
   int fd, len;
-  char buf[128];
+  uint64 addr;
   struct file *f;
+  struct proc *p = myproc();
+  if (argint(0, &fd) < 0 || argint(2, &len) < 0 || argaddr(1, &addr) < 0)
+    return -1;
 
-  argint(0, &fd);
-  argint(2, &len);
+  if (fd < 0 || fd >= 16 || (f = p->ofile[fd]) == 0)
+    return -1;
 
-  // 1. 【核心修复】：开启内核访问用户内存的权限
-  uint64 sstatus = r_sstatus();     // 读取当前的 sstatus
-  w_sstatus(sstatus | SSTATUS_SUM); // 临时把 SUM 置为 1
+  if (f->writable == 0)
+    return -1;
 
-  // 2. 现在执行读取操作就不会报 scause=13 了
-  argstr(1, buf, len + 1);
+  // ==========================================================
+  // 🚨 核心战术：无论是屏幕还是文件，统一先搬到内核避险！
+  // ==========================================================
+  char buf[128];
+  int copy_len = len < 127 ? len : 127;
+  uint64 user_addr = addr;
 
-  // 3. 【核心修复】：读取完必须立刻恢复，把墙重新砌好
-  w_sstatus(sstatus);
-
-  if (fd == 1)
+  for (int i = 0; i < copy_len; i++)
   {
-    for (int i = 0; i < len; i++)
+    // 1. 算出行首地址和偏移量
+    uint64 va_page = PGROUNDDOWN(user_addr);
+    uint64 offset = user_addr - va_page;
+
+    // 2. 拿用户进程的页表去查！
+    pte_t *pte = walk(p->pagetable, va_page, 0);
+    if (pte == 0 || (*pte & PTE_V) == 0)
     {
-      // 确保你的 console 输出函数是正确的（比如 uartputc）
-      console_print_char(buf[i]);
+      return -1; // 发现非法地址，立刻拦截，保护内核！
     }
-    return 0;
+
+    // 3. 算出内核可以直接访问的高端物理地址
+    uint64 pa = PTE2PA(*pte);
+    char *kernel_ptr = (char *)(pa + offset);
+
+    // 4. 将真实的物理内存数据，一滴不漏地搬进内核的救生艇 buf
+    buf[i] = *kernel_ptr;
+    user_addr++;
   }
 
-  f = myproc()->ofile[fd];
+  // ==========================================================
+  // 🚨 多态分发：现在大家用的都是安全的内核指针了！
+  // ==========================================================
+  if (f->type == FD_CONSOLE)
+  {
+    for (int i = 0; i < copy_len; i++)
+    {
+      console_print_char(buf[i]);
+    }
+    return copy_len;
+  }
+  else if (f->type == FD_INODE)
+  {
+    int ret = filewrite(f, (uint64)buf, copy_len);
+    return ret;
+  }
 
-  // 调用之前写好的 filewrite，它内部会处理 ilock/writei/iunlock
-  return filewrite(f, (uint64)buf, (int)len);
+  // 探针 4：类型错误
+  char msg4[] = "[Trace: UNKNOWN file type!]\n";
+  for (int i = 0; msg4[i]; i++)
+    console_print_char(msg4[i]);
+  return -1;
 }
-
 void sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
@@ -255,12 +290,21 @@ uint64 sys_fork(void)
 
   // 复制文件描述符
   for (int i = 0; i < NOFILE; i++)
+  {
     if (p->ofile[i])
+    {
       np->ofile[i] = p->ofile[i];
+      // ==========================================================
+      // 🚨 终极修复：必须增加文件的引用计数！
+      // ==========================================================
+      filedup(p->ofile[i]);
+    }
+  }
 
   // 7. 确立父子名分
   np->parent = p;
-
+  if (p->cwd)
+    np->cwd = idup(p->cwd);
   // 8. 激活子进程，让调度器可以看得到它
   acquire(&np->lock);
   np->status = TASK_READY;
@@ -597,6 +641,34 @@ uint64 sys_mkdir(void)
   /* 10. 功成身退，释放父子目录的锁和引用 */
   iunlockput(dp);
   iunlockput(ip);
+
+  return 0;
+}
+
+uint64 sys_chdir(void)
+{
+  char path[128]; // 或者你的 MAXPATH
+  struct inode *ip;
+  struct proc *p = myproc();
+
+  // 1. 获取路径参数，并用刚刚升级的 namei 找到目标 Inode
+  if (argstr(0, path, sizeof(path)) < 0 || (ip = namei(path)) == 0)
+  {
+    return -1; // 路径不存在
+  }
+
+  // 2. 锁住 Inode，检查它到底是不是个目录
+  ilock(ip);
+  if (ip->type != T_DIR)
+  {
+    iunlockput(ip); // 不是目录（比如是普通文件），拒绝切换！
+    return -1;
+  }
+  iunlock(ip); // 检查完毕，解锁（但保留引用计数，因为接下来要把它当 cwd 用）
+
+  // 3. 辞旧迎新：释放旧的目录，换上新的目录！
+  iput(p->cwd);
+  p->cwd = ip;
 
   return 0;
 }

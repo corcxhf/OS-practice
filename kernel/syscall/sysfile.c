@@ -6,7 +6,6 @@
 #include "fs.h"
 #include "types.h"
 
-
 // /* 文件系统布局参数 */
 // #define BSIZE 1024                       /* 磁盘块大小（字节）*/
 // #define NDIRECT 12                       /* 直接块指针数量 */
@@ -132,61 +131,68 @@ uint64 sys_open(void)
 
 pte_t *walk(pagetable_t pagetable, uint64 va, int alloc);
 
-uint64
-sys_read(void)
+uint64 sys_read(void)
 {
     struct file *f;
     int n, fd;
     uint64 addr;
+    struct proc *p = myproc(); // 获取当前进程
 
     /* 1. 从 trapframe 读取参数 */
-    argint(0, &fd), argint(2, &n), argaddr(1, &addr);
+    if (argint(0, &fd) < 0 || argint(2, &n) < 0 || argaddr(1, &addr) < 0)
+        return -1;
 
-    // ================== 核心控制台拦截 ==================
-    if (fd == 0)
+    // ==========================================================
+    // 2. 🚨 核心前置校验：绝不盲目信任用户，查表！
+    // ==========================================================
+    if (fd < 0 || fd >= 16 || (f = p->ofile[fd]) == 0) // 假设 NOFILE 是 16
+        return -1;
+
+    // 检查这个文件是否允许读取
+    if (f->readable == 0)
+        return -1;
+
+    // ==========================================================
+    // 3. 🚨 多态路由：根据文件类型分发数据来源！
+    // ==========================================================
+    if (f->type == FD_CONSOLE)
     {
-        uint64 user_addr = addr; // 用户传进来的 508
+        // 来源：键盘
+        uint64 user_addr = addr;
         int i;
 
         for (i = 0; i < n; i++)
         {
             extern int consgetc(void);
-            int c = consgetc();
+            int c = consgetc(); // 这里可能会阻塞等键盘
             if (c < 0)
                 break;
 
-            // 🚨 核心查表替换 🚨
-            // 1. 算出当前用户虚拟地址所在的整页边界，以及在页内的偏移量
+            // --- 你极其硬核的手工 copyout 逻辑 ---
             uint64 va_page = PGROUNDDOWN(user_addr);
             uint64 offset = user_addr - va_page;
 
-            // 2. 拿着用户进程自己的私有页表 p->pagetable 去查表
-            // walk 函数会顺着进程的独立页表找到对应的叶子表项
-            pte_t *pte = walk(myproc()->pagetable, va_page, 0);
+            pte_t *pte = walk(p->pagetable, va_page, 0);
             if (pte == 0 || (*pte & PTE_V) == 0)
-            {
-                // 如果用户的这个地址在它的页表里不合法，直接报错返回
                 return -1;
-            }
 
-            // 3. 把对应的物理地址拉出来，加上偏移量，换算出内核能直接读写的内核指针
             uint64 pa = PTE2PA(*pte);
             char *kernel_ptr = (char *)(pa + offset);
 
-            // 4. 安全写入！因为此时写入的是内核恒等映射过的高端物理/内核虚拟地址，绝不触发 Page Fault！
-            *kernel_ptr = (char)c;
-
-            // 5. 递增用户虚拟地址，为读取下一个字符做准备
+            *kernel_ptr = (char)c; // 安全写入物理内存
             user_addr++;
+            // ----------------------------------
         }
-        return i;
+        return i; // 返回读取的字节数
     }
-    // ====================================================
+    else if (f->type == FD_INODE)
+    {
+        // 来源：磁盘文件
+        // 假设你之前已经写好了 fileread 函数
+        return fileread(f, n, (char *)addr);
+    }
 
-    if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
-        return -1;
-
-    return fileread(f, n, (char *)addr);
+    return -1; // 未知设备类型
 }
 uint64 sys_close(void)
 {

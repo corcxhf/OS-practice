@@ -36,7 +36,7 @@ int fdalloc(struct file *f)
     int fd;
     struct proc *p = myproc();
 
-    for (fd = 3; fd < NOFILE; fd++)
+    for (fd = 0; fd < NOFILE; fd++)
     {
         /* 如果找到一个空槽位 */
         if (p->ofile[fd] == 0)
@@ -62,13 +62,19 @@ void fileclose(struct file *f)
     if (--f->ref > 0)
         return; // 如果还有人在用，直接返回
 
-    // 只有 ref == 0 了才真正释放
-    iput(f->ip);
-    f->type = 0;
+    // ==========================================================
+    // 🚨 核心修复：只有文件类型是 INODE 时，才去释放 Inode！
+    // ==========================================================
+    if (f->type == FD_INODE)
+        iput(f->ip);
+    else if (f->type == FD_CONSOLE)
+    {
+    }
+
+    f->type = 0; // 或者你定义的 FD_NONE
     f->ip = 0;
     f->off = 0;
 }
-
 int fileread(struct file *f, int n, char *buf)
 {
     if (!f->readable)

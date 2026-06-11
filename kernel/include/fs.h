@@ -14,6 +14,7 @@
 #define FD_PIPE 1
 #define FD_INODE 2
 #define FD_DEVICE 3
+#define FD_CONSOLE 4
 
 #ifndef O_CREAT
 #define O_CREAT 0x200

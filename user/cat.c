@@ -29,8 +29,8 @@ void main(int argc, char *argv[])
     {
         syscall(SYS_write, 1, (uint64)buf, (uint64)n);
     }
-    char newline = '\n';
-    syscall(SYS_write, 1, (uint64)&newline, 1);
+    // char newline = '\n';
+    // syscall(SYS_write, 1, (uint64)&newline, 1);
 
     syscall(SYS_close, (uint64)fd, 0, 0);
     syscall(SYS_exit, 0, 0, 0);

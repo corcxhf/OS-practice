@@ -23,7 +23,7 @@
 #define SYS_close 18
 #define SYS_fstat 19
 #define SYS_mkdir 20
-
+#define SYS_chdir 21
 /* ================================================================
  * 进程状态枚举
  * ================================================================ */
@@ -147,6 +147,7 @@ struct proc
   int killed;                  /*被杀标志*/
 
   struct file *ofile[NOFILE];
+  struct inode *cwd;
 };
 
 /* CPU 描述结构 */

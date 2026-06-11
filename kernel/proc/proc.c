@@ -13,11 +13,12 @@
 #include "param.h"
 #include "riscv.h"
 #include "types.h"
+#include "fs.h"
 
 extern void set_pte_u(pagetable_t pagetable, uint64 va);
 struct proc proc[NPROC];
 struct cpu cpus[NCPU];
-
+extern struct file *filealloc();
 extern void acquire(struct spinlock *);
 extern void initlock(struct spinlock *lk, char *name);
 extern void release(struct spinlock *lk);
@@ -257,7 +258,24 @@ void userinit()
   p->trapframe->sp = PGSIZE + PGSIZE; // 👈 虚拟地址 0x2000 作为初始栈顶
 
   p->sz = PGSIZE + PGSIZE; // 👈 明确告诉系统，父进程现在有 2 页大小的用户空间！
+  struct file *f0 = filealloc();
+  struct file *f1 = filealloc();
 
+  // f0->type = FD_CONSOLE; // 0 号是控制台（读键盘）
+  // f1->type = FD_CONSOLE; // 1 号也是控制台（写屏幕）
+
+  f0->type = FD_CONSOLE;
+  f0->readable = 1; // 🚨 0号是标准输入，必须能读！
+  f0->writable = 0; // 不能往键盘里写
+
+  f1->type = FD_CONSOLE;
+  f1->readable = 0; // 不能从屏幕里读
+  f1->writable = 1;
+
+  p->ofile[0] = f0;
+  p->ofile[1] = f1;
+
+  p->cwd = namei("/");
   p->name = "proczero";
   p->status = TASK_READY;
   release(&p->lock);

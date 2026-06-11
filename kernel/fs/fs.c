@@ -20,7 +20,8 @@
 #include "proc.h"
 extern void virtio_disk_init(void);
 extern int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len);
-
+extern void acquire(struct spinlock *);
+extern void release(struct spinlock *lk);
 /* 磁盘上的 inode 结构（存储在磁盘上的格式）*/
 
 /* 内存中的 inode（缓存版，包含磁盘版本和额外运行时信息）*/
@@ -118,6 +119,14 @@ uint bmap(struct inode *ip, uint bn)
   panic("bmap: out of range");
 }
 
+// 增加 inode 的引用计数
+struct inode *idup(struct inode *ip)
+{
+  // acquire(&icache.lock);
+  ip->ref++;
+  // release(&icache.lock);
+  return ip;
+}
 /* ================================================================
  * readi — 从 inode 文件中读取数据
  *
@@ -435,13 +444,21 @@ struct inode *namei(char *path)
 {
   char name[DIRSIZ];
   struct inode *ip, *next;
-
+  struct proc *p = myproc();
   /* 步骤 1: 决定起点 */
   // 如果以 '/' 开头，从根目录开始；否则从当前目录开始（此处简化始终从根开始）
   if (*path == '/')
     ip = iget(ROOTDEV, ROOTINO);
   else
-    ip = iget(ROOTDEV, ROOTINO); // 实验通常简化处理
+  {
+    // 🚨 终极防弹衣：如果因为某些诡异原因当前进程没有 cwd，
+    // 强制给它降级回绝对路径模式，绝不让它空指针崩溃！
+    if (p->cwd == 0)
+      ip = iget(ROOTDEV, ROOTINO);
+    else
+      ip = idup(p->cwd);
+  }
+  // ip = iget(ROOTDEV, ROOTINO); // 实验通常简化处理
 
   /* 步骤 2: 循环解析路径分量 */
   while ((path = skipelem(path, name)) != 0)
@@ -539,11 +556,18 @@ void iunlockput(struct inode *ip)
 struct inode *nameiparent(char *path, char *name)
 {
   struct inode *ip, *next;
-
+  struct proc *p = myproc();
   if (*path == '/')
+  {
     ip = iget(ROOTDEV, ROOTINO);
+  }
   else
-    ip = iget(ROOTDEV, ROOTINO); // 简化版从根目录开始
+  {
+    if (p->cwd == 0)
+      ip = iget(ROOTDEV, ROOTINO);
+    else
+      ip = idup(p->cwd);
+  }
 
   while ((path = skipelem(path, name)) != 0)
   {

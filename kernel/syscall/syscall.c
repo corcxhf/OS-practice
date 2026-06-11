@@ -27,6 +27,7 @@ extern uint64 sys_exec(void);
 extern uint64 walkaddr(pagetable_t pagetable, uint64 va);
 extern uint64 sys_fstat(void);
 extern uint64 sys_mkdir(void);
+extern uint64 sys_chdir(void);
 // extern uint64 sys_wait(void);
 
 static uint64 (*syscalls[30])(void) = {
@@ -41,6 +42,7 @@ static uint64 (*syscalls[30])(void) = {
     [SYS_close] = sys_close,
     [SYS_fstat] = sys_fstat,
     [SYS_mkdir] = sys_mkdir,
+    [SYS_chdir] = sys_chdir,
 };
 
 /* ================================================================
