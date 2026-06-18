@@ -22,6 +22,30 @@ CFLAGS = -nostdlib -fno-builtin -mcmodel=medany \
 U = user
 K = kernel
 
+TINYCC_DIR = tinycc
+TCC_USER_CC ?= riscv64-linux-gnu-gcc
+TCC_USER_AR ?= riscv64-linux-gnu-ar
+TCC_RUNTIME_CC ?= $(CC)
+TCC_RUNTIME_AR ?= $(CROSS)ar
+TCC_USER = tcc
+TCC_PREDEFS = $(TINYCC_DIR)/tccdefs_.h
+TCC_C2STR = $(TINYCC_DIR)/c2str.exe
+TCC_RUNTIME = crt1.o crti.o crtn.o libc.a
+TCC_RUNTIME_CFLAGS = -Os -nostdlib -fno-builtin -ffreestanding \
+    -mno-relax -msmall-data-limit=0 -fno-pic -fno-pie \
+    -mcmodel=medany -march=rv64gc -mabi=lp64d
+TCC_USER_DEPS = \
+    $(TCC_PREDEFS) \
+    $(wildcard $(TINYCC_DIR)/*.c) \
+    $(wildcard $(TINYCC_DIR)/*.h) \
+    $(wildcard $(K)/include/*.h)
+TCC_USER_CFLAGS = -Os -static -nostdlib -fno-builtin \
+    -mno-relax -msmall-data-limit=0 \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-e,_start -Wl,-s \
+    -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
+    -I. -I$(abspath $(K)/include) \
+    -DONE_SOURCE -DCONFIG_TCC_PREDEFS=1 -DTCC_TARGET_RISCV64
+
 SRCS = \
     $K/boot/entry.S \
     $K/driver/uart.c \
@@ -61,7 +85,8 @@ UPROGS = \
     $U/touch \
     $U/mkdir \
     $U/clear \
-    $U/rm 
+    $U/rm \
+    $U/sbrktest 
 #     $U/testpipe \
 
 $U/%.o: $U/%.c
@@ -84,9 +109,33 @@ all: $(KERNEL)
 mkfs: mkfs.c
 	gcc mkfs.c -o mkfs
 
-fs.img: mkfs $(UPROGS)
+$(TCC_C2STR): $(TINYCC_DIR)/conftest.c
+	gcc -DC2STR $< -o $@
+
+$(TCC_PREDEFS): $(TINYCC_DIR)/include/tccdefs.h $(TCC_C2STR)
+	$(TCC_C2STR) $< $@
+
+$(TCC_USER): $(TCC_USER_DEPS)
+	cd $(TINYCC_DIR) && $(TCC_USER_CC) $(TCC_USER_CFLAGS) malloc.c glue.c tcc.c -o ../$(TCC_USER) -lgcc
+
+crt1.o: $(TINYCC_DIR)/myos-crt1.S
+	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
+
+crti.o: $(TINYCC_DIR)/myos-crti.S
+	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
+
+crtn.o: $(TINYCC_DIR)/myos-crtn.S
+	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
+
+$(TINYCC_DIR)/myos-libc.o: $(TINYCC_DIR)/myos-libc.c
+	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
+
+libc.a: $(TINYCC_DIR)/myos-libc.o
+	$(TCC_RUNTIME_AR) rcs $@ $<
+
+fs.img: mkfs $(UPROGS) $(TCC_USER) $(TCC_RUNTIME)
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
-	./mkfs fs.img $(UPROGS)
+	./mkfs fs.img $(UPROGS) ./$(TCC_USER) $(TCC_RUNTIME)
 
 
 $U/initcode.out: $U/initcode.c $U/initcode.ld
@@ -128,6 +177,6 @@ debug: $(KERNEL) fs.img
 	-s -S 
 
 clean: 
-	rm -f $(KERNEL) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d mkfs fs.img
+	rm -f $(KERNEL) $(TCC_USER) $(TCC_PREDEFS) $(TCC_C2STR) $(TCC_RUNTIME) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d $(TINYCC_DIR)/myos-libc.o mkfs fs.img
 
 .PHONY: all run debug clean

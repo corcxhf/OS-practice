@@ -206,6 +206,10 @@ void usertrap(void)
       panic("scause 15");
     }
     /* 理想情况下应该 exit(-1) 杀死该进程，暂不实现 */
+    uint64 cause = r_scause();
+    uint64 epc = r_sepc();
+    uint64 tval = r_stval();
+    printf("\n[USERTRAP 绝密档案] scause: %d, sepc: 0x%lx, stval: 0x%lx\n", cause, epc, tval);
     panic("usertrap");
   }
 }

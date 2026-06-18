@@ -27,6 +27,11 @@
 #define SYS_pipe 22
 #define SYS_dup 23
 #define SYS_unlink 24
+#define SYS_lseek 25
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 /* ================================================================
  * 进程状态枚举
  * ================================================================ */

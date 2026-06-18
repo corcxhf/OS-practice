@@ -13,7 +13,7 @@
 #include "types.h"
 #include "elf.h"
 #include "fs.h"
-
+extern int argfd(int n, int *pfd, struct file **pf);
 extern int namecmp(const char *s, const char *t);
 extern struct file *filealloc();
 extern void fileclose(struct file *f);
@@ -48,6 +48,7 @@ extern int fetchstr(uint64 s, char *dst, int max);
 extern int strlen(const char *s);
 extern int filestat(struct file *f, uint64 addr);
 extern int pipewrite(struct pipe *pi, uint64 addr, int n);
+extern int growproc(int n);
 /* ================================================================
  * sys_getpid — 返回当前进程的 PID
  *
@@ -123,6 +124,7 @@ uint64 sys_write(void)
   uint64 addr;
   struct file *f;
   struct proc *p = myproc();
+
   if (argint(0, &fd) < 0 || argint(2, &len) < 0 || argaddr(1, &addr) < 0)
     return -1;
 
@@ -132,59 +134,74 @@ uint64 sys_write(void)
   if (f->writable == 0)
     return -1;
 
-  // ==========================================================
-  // 🚨 核心战术：无论是屏幕还是文件，统一先搬到内核避险！
-  // ==========================================================
-  char buf[128];
-  int copy_len = len < 127 ? len : 127;
+  // if (f->type == FD_INODE && fd > 2)
+  // {
+  //   printf("[DEBUG] sys_write 尝试! fd=%d, 当前偏移 off=%d, 企图写入大小 len=%d\n", fd, f->off, len);
+  // }
+
   uint64 user_addr = addr;
+  int total_written = 0; // 记录总共成功写入了多少字节
+  int left = len;        // 剩余需要搬运的字节数
 
-  for (int i = 0; i < copy_len; i++)
+  // 🌟 外层滚动循环：每次安全搬运最多 128 字节，直到 left 清零
+  while (left > 0)
   {
-    // 1. 算出行首地址和偏移量
-    uint64 va_page = PGROUNDDOWN(user_addr);
-    uint64 offset = user_addr - va_page;
+    char buf[128];
+    int chunk = left < 128 ? left : 128;
 
-    // 2. 拿用户进程的页表去查！
-    pte_t *pte = walk(p->pagetable, va_page, 0);
-    if (pte == 0 || (*pte & PTE_V) == 0)
+    // 1. 安全从用户态按字节捞取这一个 chunk 的数据
+    for (int i = 0; i < chunk; i++)
     {
-      return -1; // 发现非法地址，立刻拦截，保护内核！
+      uint64 va_page = PGROUNDDOWN(user_addr);
+      uint64 offset = user_addr - va_page;
+      pte_t *pte = walk(p->pagetable, va_page, 0);
+      if (pte == 0 || (*pte & PTE_V) == 0)
+      {
+        return total_written > 0 ? total_written : -1; // 踩到非法内存，若此前有数据则返回已写长度
+      }
+      uint64 pa = PTE2PA(*pte);
+      char *kernel_ptr = (char *)(pa + offset);
+      buf[i] = *kernel_ptr;
+      user_addr++;
+    }
+    int ret = 0;
+    if (f->type == FD_CONSOLE)
+    {
+      for (int i = 0; i < chunk; i++)
+        console_print_char(buf[i]);
+      ret = chunk;
+    }
+    else if (f->type == FD_INODE)
+    {
+      ret = filewrite(f, (uint64)buf, chunk);
+    }
+    else if (f->type == FD_PIPE)
+    {
+      ret = pipewrite(f->pipe, (uint64)buf, chunk);
+    }
+    else
+    {
+      char msg4[] = "[Trace: UNKNOWN file type!]\n";
+      for (int i = 0; msg4[i]; i++)
+        console_print_char(msg4[i]);
+      return -1;
+    }
+    if (ret < 0)
+    {
+      return total_written > 0 ? total_written : -1;
     }
 
-    // 3. 算出内核可以直接访问的高端物理地址
-    uint64 pa = PTE2PA(*pte);
-    char *kernel_ptr = (char *)(pa + offset);
-
-    // 4. 将真实的物理内存数据，一滴不漏地搬进内核的救生艇 buf
-    buf[i] = *kernel_ptr;
-    user_addr++;
+    total_written += ret;
+    left -= ret;
+    if (ret < chunk)
+    {
+      break;
+    }
   }
 
-  // ==========================================================
-  // 🚨 多态分发：现在大家用的都是安全的内核指针了！
-  // ==========================================================
-  if (f->type == FD_CONSOLE)
-  {
-    for (int i = 0; i < copy_len; i++)
-      console_print_char(buf[i]);
-    return copy_len;
-  }
-  else if (f->type == FD_INODE)
-  {
-    int ret = filewrite(f, (uint64)buf, copy_len);
-    return ret;
-  }
-  else if (f->type == FD_PIPE)
-  {
-    return pipewrite(f->pipe, (uint64)buf, copy_len);
-  }
-
-  char msg4[] = "[Trace: UNKNOWN file type!]\n";
-  for (int i = 0; msg4[i]; i++)
-    console_print_char(msg4[i]);
-  return -1;
+  return total_written;
 }
+
 void sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
@@ -219,8 +236,6 @@ uint64 sys_wait(void)
   int have_kids, pid;
   uint64 addr;
   argaddr(0, &addr);
-
-  // xv6 的标准做法：在整个循环外拿父进程锁
   acquire(&p->lock);
 
   for (;;)
@@ -256,8 +271,6 @@ uint64 sys_wait(void)
       release(&p->lock);
       return -1;
     }
-
-    // 此时 p->lock 是持有的，sleep 内部会处理锁的释放
     sleep(p, &p->lock);
   }
 }
@@ -266,15 +279,12 @@ uint64 sys_fork(void)
 {
   struct proc *p = myproc();
 
-  // 1. 调用你原有的 allocproc，拿到子进程 proc 结构体，以及它自带的物理 trapframe
   struct proc *np = allocproc();
   if (np == 0)
     return -1;
 
-  // 2. 分配内核栈 (kstack)
   if ((np->kstack = (uint64)kalloc()) == 0)
   {
-    // 失败清理
     kfree(np->trapframe);
     acquire(&np->lock);
     np->status = TASK_FREE;
@@ -353,6 +363,7 @@ uint64 sys_exec(void)
   uint64 sz = 0, old_sz;
   pagetable_t old_pagetable;
   uint64 sp, stackbase;
+  uint64 exitstub = 0;
   if (argstr(0, path, sizeof(path)) < 0)
     return -1;
   if (argaddr(1, &uargv) < 0)
@@ -374,36 +385,39 @@ uint64 sys_exec(void)
       goto bad;
   }
 
-  // =========================================================
-  // 2. 查找并打开 ELF 文件，读取文件头 (ELF Header)
-  // // =========================================================
-  // begin_op();
-
   if ((ip = namei(path)) == 0)
   {
-    // end_op();
     goto bad;
   }
   ilock(ip);
 
-  // 读取 ELF 头部
+  // 🚨 测谎仪部署开始
+  int read_len = readi(ip, 0, (uint64)&elf, 0, sizeof(elf));
+  if (read_len != sizeof(elf))
+  {
+    printf("\n[EXEC FATAL] ELF 头读取失败！只读到了 %d 字节（文件可能是空的）\n", read_len);
+    goto bad;
+  }
+
+  if (elf.magic != ELF_MAGIC)
+  {
+    printf("\n[EXEC FATAL] ELF 格式损坏！\n");
+    printf(" -> 期望的魔数 (ELF_MAGIC): 0x%lx\n", ELF_MAGIC);
+    printf(" -> 实际读到的魔数: 0x%x\n", elf.magic);
+    goto bad;
+  }
+  // 🚨 测谎仪部署结束
+
   if (readi(ip, 0, (uint64)&elf, 0, sizeof(elf)) != sizeof(elf))
     goto bad;
 
-  // 校验 ELF 文件的魔数是否合法
   if (elf.magic != ELF_MAGIC)
     goto bad;
 
-  // =========================================================
-  // 3. 创世阶段：调用工厂申请一个属于该进程的全新隔离页表
-  // =========================================================
   new_pagetable = proc_pagetable(p);
   if (new_pagetable == 0)
     goto bad;
 
-  // =========================================================
-  // 4. 解析 ELF 每一个 Segment 并加载代码/数据到新页表宇宙
-  // =========================================================
   sz = 0;
   for (int i = 0, off = elf.phoff; i < elf.phnum; i++, off += sizeof(ph))
   {
@@ -457,8 +471,17 @@ uint64 sys_exec(void)
       uint64 pa = PTE2PA(*pte);
 
       // 直接从磁盘读入对应的物理页偏移地址
-      if (readi(ip, 0, pa + offset_in_page, file_off, n) != n)
+      int r = readi(ip, 0, pa + offset_in_page, file_off, n);
+
+      if (r != n)
+      {
+        printf("\n[EXEC FATAL] readi 翻车现场！\n");
+        printf(" -> 当前 ELF 段 vaddr : 0x%lx\n", ph.vaddr);
+        printf(" -> 想要读取的字节数 n: %d\n", (int)n);
+        printf(" -> 实际读到的字节数 r: %d\n", r);
+        printf(" -> 翻车时的文件偏移 file_off: %d\n", (int)file_off);
         goto bad;
+      }
 
       file_sz -= n;
       seg_va += n;
@@ -475,24 +498,47 @@ uint64 sys_exec(void)
   ip = 0;
 
   // =========================================================
-  // 5. 为新宇宙分配并映射用户栈 (User Stack)
+  // 5. 为新宇宙分配并映射用户栈 (User Stack) - 爆改豪华 32 页版！
   // =========================================================
   sz = PGROUNDUP(sz);
-  void *stack_pa = kalloc();
-  if (stack_pa == 0)
+  exitstub = sz;
+  void *exitstub_pa = kalloc();
+  if (exitstub_pa == 0)
     goto bad;
-  memset(stack_pa, 0, PGSIZE);
-
-  // 🚨 映射用户栈：pa 在前，va (sz) 在后
-  if (mappages(new_pagetable, (uint64)stack_pa, sz, PGSIZE, PTE_R | PTE_W | PTE_U) < 0)
+  memset(exitstub_pa, 0, PGSIZE);
+  uint32 exitcode[] = {
+      0x00200893, // li a7, SYS_exit
+      0x00000513, // li a0, 0
+      0x00000073, // ecall
+  };
+  memmove(exitstub_pa, exitcode, sizeof(exitcode));
+  if (mappages(new_pagetable, (uint64)exitstub_pa, exitstub, PGSIZE, PTE_R | PTE_X | PTE_U) < 0)
   {
-    kfree(stack_pa);
+    kfree(exitstub_pa);
     goto bad;
+  }
+  sz += PGSIZE;
+
+  uint64 stack_pages = 32; // 给它 128KB 绝对管够！
+
+  for (int i = 0; i < stack_pages; i++)
+  {
+    void *stack_pa = kalloc();
+    if (stack_pa == 0)
+      goto bad;
+    memset(stack_pa, 0, PGSIZE);
+
+    // 逐页映射这 32 页内存
+    if (mappages(new_pagetable, (uint64)stack_pa, sz + i * PGSIZE, PGSIZE, PTE_R | PTE_W | PTE_U) < 0)
+    {
+      kfree(stack_pa);
+      goto bad;
+    }
   }
 
   stackbase = sz;
-  sp = sz + PGSIZE; // 初始栈顶虚拟地址（Sv39 下往下生长）
-  sz += PGSIZE;     // 内存大小增加一页
+  sp = sz + stack_pages * PGSIZE; // 栈顶设置在 32 页的最顶端
+  sz += stack_pages * PGSIZE;     // sz 水位线上涨
 
   // =========================================================
   // 6. 压栈环节：把暂存在内核的 argv 参数字符串推进新用户栈
@@ -506,9 +552,9 @@ uint64 sys_exec(void)
     if (sp < stackbase)
       goto bad;
 
-    // 映射虚拟栈地址到刚才分配的物理栈内存上
-    // 因为内核在当前阶段是恒等映射，你可以像下面这样通过偏移直接写物理栈：
-    memmove((void *)((uint64)stack_pa + (sp - stackbase)), (void *)argv[i], len);
+    if (copyout(new_pagetable, sp, (char *)argv[i], len) < 0)
+      goto bad;
+
     ustack[i] = sp; // 记录该参数在用户态的虚拟地址
   }
   ustack[argc] = 0; // argv[argc] = NULL
@@ -518,8 +564,9 @@ uint64 sys_exec(void)
   sp -= sp % 16;
   if (sp < stackbase)
     goto bad;
-  memmove((void *)((uint64)stack_pa + (sp - stackbase)), ustack, (argc + 1) * sizeof(uint64));
 
+  if (copyout(new_pagetable, sp, (char *)ustack, (argc + 1) * sizeof(uint64)) < 0)
+    goto bad;
   // =========================================================
   // 7. 终极一换：新旧交替，换表仪式
   // =========================================================
@@ -531,8 +578,11 @@ uint64 sys_exec(void)
   p->sz = sz;
 
   // 设置用户态起飞现场
+  memset(p->trapframe, 0, PGSIZE);
   p->trapframe->epc = elf.entry; // 新程序的入口地址（如 0x100b0）
+  p->trapframe->ra = exitstub;   // 如果裸 _start 返回，自动转入 exit(0)
   p->trapframe->sp = sp;         // 刚刚布局好的用户栈顶虚拟地址
+  p->trapframe->a0 = argc;       // 根据 RISC-V C ABI，a0 寄存器存放 argc
   p->trapframe->a1 = sp;         // 根据 RISC-V C ABI，a1 寄存器存放 argv 指针
 
   // 释放内核暂存参数时借用的临时物理页
@@ -859,4 +909,54 @@ uint64 sys_unlink(void)
 bad:
   iunlockput(dp);
   return -1;
+}
+
+uint64 sys_sbrk(void)
+{
+  int addr;
+  int n;
+
+  if (argint(0, &n) < 0)
+    return -1;
+
+  struct proc *p = myproc();
+
+  addr = p->sz;
+  if (growproc(n) < 0)
+    return -1;
+
+  return addr;
+}
+
+uint64 sys_lseek(void)
+{
+  struct file *f;
+  int offset;
+  int whence;
+
+  // 1. 获取用户传进来的三个参数：fd, offset, whence
+  if (argfd(0, 0, &f) < 0 || argint(1, &offset) < 0 || argint(2, &whence) < 0)
+    return -1;
+
+  // 2. 根据 whence 规则移动文件指针
+  if (whence == SEEK_SET)
+  {
+    f->off = offset;
+  }
+  else if (whence == SEEK_CUR)
+  {
+    f->off += offset;
+  }
+  else if (whence == SEEK_END)
+  {
+    // 对于只写文件，如果是追尾，要用文件当前大小
+    f->off = f->ip->size + offset;
+  }
+  else
+  {
+    return -1;
+  }
+
+  // 3. 返回修改后的当前绝对偏移量
+  return f->off;
 }

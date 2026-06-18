@@ -185,7 +185,11 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
   uint tot, m;
   struct buf *bp;
   if (off > ip->size || off + n < off)
+  {
+    printf("\n[FS FATAL] writei 越界拦截！文件当前大小=%d, 企图写入位置=%d\n", ip->size, off);
     return -1;
+  }
+
   if (off + n > (NDIRECT + NINDIRECT) * BSIZE)
     return -1;
 

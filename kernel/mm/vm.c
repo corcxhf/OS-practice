@@ -258,7 +258,7 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     */
 
     if ((pte = walk(old, i, 0)) == 0)
-      continue; 
+      continue;
     if ((*pte & PTE_V) == 0)
       continue;
 
@@ -463,4 +463,60 @@ void proc_freepagetable(pagetable_t pagetable, uint64 sz)
 
   asm volatile("sfence.vma zero, zero");
   freewalk(pagetable);
+}
+
+// 将进程的内存空间从 oldsz 缩小到 newsz，并释放多余的物理内存
+uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  // 如果新的大小比旧的还要大，说明不是缩容，直接返回旧大小
+  if (newsz >= oldsz)
+    return oldsz;
+
+  // 向上取整计算页边界，判断这次缩容是否跨越了物理页的边界
+  if (PGROUNDUP(newsz) < PGROUNDUP(oldsz))
+  {
+    // 计算出需要释放的物理页数量
+    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
+
+    // 🚨 完美调用：传递对齐的 PGROUNDUP(newsz) 作为虚拟地址起始点
+    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 1);
+  }
+
+  return newsz;
+}
+
+// 将虚拟地址从 oldsz 增长到 newsz，分配物理内存并映射
+uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
+{
+  char *mem;
+  uint64 a;
+
+  if (newsz < oldsz)
+    return oldsz;
+
+  // 向上按页对齐 (比如 4096)
+  oldsz = PGROUNDUP(oldsz);
+
+  for (a = oldsz; a < newsz; a += PGSIZE)
+  {
+    // 向物理内存分配器要一页干净的内存
+    mem = kalloc();
+    if (mem == 0)
+    {
+      // 如果物理内存用光了，需要把刚才成功分配的页全吐出来
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+    memset(mem, 0, PGSIZE);
+
+    // 🚨 绝对核心修正：严格按照你的 mappages 参数顺序！
+    // 参数：pagetable, pa (物理地址), va (虚拟地址), size, perm
+    if (mappages(pagetable, (uint64)mem, a, PGSIZE, PTE_W | PTE_R | PTE_U) != 0)
+    {
+      kfree(mem);
+      uvmdealloc(pagetable, a, oldsz);
+      return 0;
+    }
+  }
+  return newsz;
 }

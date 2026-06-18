@@ -42,7 +42,7 @@ uint64 sys_open(void)
     // 注意：在 xv6 框架中，argstr 内部通常已经处理了 copyinstr
     if (argstr(0, path, MAXPATH) < 0 || argint(1, &flags) < 0)
         return -1;
-
+    // printf("[DEBUG] sys_open called! path: %s, omode: %d\n", path, flags);
     if (flags & O_CREAT)
     {
         /* 3. 若 O_CREAT 标志设置：创建文件逻辑 */

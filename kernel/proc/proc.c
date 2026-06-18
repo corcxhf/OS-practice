@@ -25,7 +25,8 @@ extern void release(struct spinlock *lk);
 extern int holding(struct spinlock *lk);
 extern pagetable_t proc_pagetable(struct proc *p);
 extern void *memmove(void *dest, const void *src, unsigned long n);
-
+extern uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
+extern uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
 // static uint8 proczero_code[] = {
 //     0x73,
 //     0x00,
@@ -234,32 +235,44 @@ void userinit()
   p->context.sp = p->kstack + PGSIZE;
   p->context.ra = (uint64)forkret;
 
-  // 1. 申请存放 initcode 机器码的物理页
-  uint64 code_pa = (uint64)kalloc();
-  memset((void *)code_pa, 0, PGSIZE);
-  memmove((void *)code_pa, _binary_initcode_bin_start, initcode_size);
-
-  // 🚨 拨乱反正：不要再搞恒等映射了！
-  // 强行把这页物理内存，映射到用户宇宙的绝对起点——虚拟地址 0x0 处！
-  mappages(p->pagetable, code_pa, 0, PGSIZE, PTE_R | PTE_W | PTE_X | PTE_U);
+  // 1. 按实际大小映射 initcode。shell 可能超过一页，栈必须放在它后面。
+  uint64 code_sz = PGROUNDUP(initcode_size);
+  for (uint64 off = 0; off < code_sz; off += PGSIZE)
+  {
+    uint64 code_pa = (uint64)kalloc();
+    if (code_pa == 0)
+    {
+      p->status = TASK_FREE;
+      release(&p->lock);
+      return;
+    }
+    memset((void *)code_pa, 0, PGSIZE);
+    if (off < initcode_size)
+    {
+      uint64 n = initcode_size - off;
+      if (n > PGSIZE)
+        n = PGSIZE;
+      memmove((void *)code_pa, _binary_initcode_bin_start + off, n);
+    }
+    mappages(p->pagetable, code_pa, off, PGSIZE, PTE_R | PTE_W | PTE_X | PTE_U);
+  }
 
   // 2. 分配并映射用户栈
   uint64 userstack_pa = (uint64)kalloc();
   memset((void *)userstack_pa, 0, PGSIZE);
-  // 把用户栈安排在虚拟地址 0x1000 处（也就是紧挨着代码段的下一页）
-  mappages(p->pagetable, userstack_pa, PGSIZE, PGSIZE, PTE_R | PTE_W | PTE_U);
+  mappages(p->pagetable, userstack_pa, code_sz, PGSIZE, PTE_R | PTE_W | PTE_U);
 
   // 3. 冲刷 TLB
   asm volatile("sfence.vma zero, zero");
   memset(p->trapframe, 0, PGSIZE);
 
-  // 🚨 终极解耦：用户态的眼睛从此只能看到低位虚拟地址！
-  p->trapframe->epc = 0;              // 👈 新程序的入口永远是虚拟地址 0x0！
-  p->trapframe->sp = PGSIZE + PGSIZE; // 👈 虚拟地址 0x2000 作为初始栈顶
+  p->trapframe->epc = 0;                  // 👈 新程序的入口永远是虚拟地址 0x0！
+  p->trapframe->sp = code_sz + PGSIZE;    // 用户栈放在 initcode 之后
 
-  p->sz = PGSIZE + PGSIZE; // 👈 明确告诉系统，父进程现在有 2 页大小的用户空间！
+  p->sz = code_sz + PGSIZE;
   struct file *f0 = filealloc();
   struct file *f1 = filealloc();
+  struct file *f2 = filealloc();
 
   // f0->type = FD_CONSOLE; // 0 号是控制台（读键盘）
   // f1->type = FD_CONSOLE; // 1 号也是控制台（写屏幕）
@@ -272,8 +285,13 @@ void userinit()
   f1->readable = 0; // 不能从屏幕里读
   f1->writable = 1;
 
+  f2->type = FD_CONSOLE;
+  f2->readable = 0;
+  f2->writable = 1;
+
   p->ofile[0] = f0;
   p->ofile[1] = f1;
+  p->ofile[2] = f2;
 
   p->cwd = namei("/");
   p->name = "proczero";
@@ -296,4 +314,29 @@ void wakeup(void *chan)
       release(&p->lock);
     }
   }
+}
+
+int growproc(int n)
+{
+  uint64 sz;
+  struct proc *p = myproc();
+
+  sz = p->sz;
+  if (n > 0)
+  {
+    // 扩容：分配物理页并挂载到页表
+    if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0)
+    {
+      return -1; // OOM (内存耗尽) 拦截
+    }
+  }
+  else if (n < 0)
+  {
+    // 缩容：解除页表映射并回收物理页
+    sz = uvmdealloc(p->pagetable, sz, sz + n);
+  }
+
+  // 更新进程的内存天花板
+  p->sz = sz;
+  return 0;
 }

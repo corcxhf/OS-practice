@@ -12,56 +12,14 @@ void do_cat(int fd)
 
     if (fd == 0)
     {
-        int i = 0;
-        char c;
-        int is_pipe = 0; // 管道探测标记
-
-        while (syscall(SYS_read, 0, (uint64)&c, 1) > 0)
+        while ((n = (int)syscall(SYS_read, 0, (uint64)buf, sizeof(buf))) > 0)
         {
-            // 🚨 1. 纯用户态 Ctrl+C 拦截：随时服毒自尽
-            if (c == 3)
+            for (int i = 0; i < n; i++)
             {
-                syscall(SYS_exit, 0, 0, 0);
-            }
-
-            // 🚨 2. 核心魔法：实时回显与管道探测的分水岭
-            // 如果是键盘输入，在回车触发前，内核缓冲区里其实是一股脑堆积了你敲的所有字
-            // 如果一上来 i == 0 读到的第一个字符不是回车，且我们把它写回屏幕
-            if (i == 0 && c != '\n' && is_pipe == 0)
-            {
-                // 探测：我们在用户态直接把它吐出来！
-                // 这样无论内核什么时候唤醒它，只要拿到字符，立刻在屏幕上补上回显！
-                syscall(SYS_write, 1, (uint64)&c, 1);
-            }
-            else if (is_pipe == 0 && i > 0)
-            {
-                // 键盘盲打流的后续字符：由 cat 在用户态接管实时回显
-                syscall(SYS_write, 1, (uint64)&c, 1);
-            }
-            else if (i == 0 && c != '\n' && is_pipe == 0)
-            {
-                // 判定为非键盘流入（无缝块数据）
-                is_pipe = 1;
-            }
-
-            buf[i++] = c;
-
-            // 遇到回车，或者缓冲区满了
-            if (c == '\n' || i == 512)
-            {
-                // 如果是管道，我们只做静默单次打印
-                if (is_pipe)
-                {
-                    syscall(SYS_write, 1, (uint64)buf, (uint64)i);
+                if (buf[i] == 3)
                     syscall(SYS_exit, 0, 0, 0); // 瞬间断尾，交回控制权
-                }
-                else
-                {
-                    // 如果是键盘输入，回车按下后，打印出 cat 标志性的“复读”行
-                    syscall(SYS_write, 1, (uint64)buf, (uint64)i);
-                    i = 0; // 清空，等待下一行
-                }
             }
+            syscall(SYS_write, 1, (uint64)buf, (uint64)n);
         }
     }
     else

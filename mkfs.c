@@ -124,27 +124,62 @@ int main(int argc, char *argv[])
         fin.nlink = 1;
         fin.size = 0;
 
+// 🌟 终极改造：定义间接块容量，并准备一个在内存里的“索引表”
+#define NINDIRECT (BSIZE / sizeof(uint))
+        uint indirect_array[NINDIRECT];
+        memset(indirect_array, 0, sizeof(indirect_array));
+
         // 循环读取文件的真实数据，并写入数据块
         char fbuf[BSIZE];
         int cc;
         int blk_idx = 0;
         while ((cc = read(ffd, fbuf, BSIZE)) > 0)
         {
-            if (blk_idx >= NDIRECT)
+            if (blk_idx < NDIRECT)
             {
-                printf("错误: 文件 %s 太大了，超过了直接索引块数量\n", shortname);
+                // 1. 常规操作：写前 12 个直接块
+                lseek(fd, freeblock * BSIZE, SEEK_SET);
+                write(fd, fbuf, BSIZE);
+                fin.addrs[blk_idx] = freeblock;
+                freeblock++;
+            }
+            else if (blk_idx < NDIRECT + NINDIRECT)
+            {
+                // 2. 突破极限：写一级间接块 (第 13 块到第 268 块)
+                if (blk_idx == NDIRECT)
+                {
+                    // 刚跨过 12KB 边界，先分配一个物理块用来存“指针目录”本身
+                    fin.addrs[NDIRECT] = freeblock;
+                    freeblock++;
+                }
+
+                // 把真实的 TCC 代码数据写进新块里
+                lseek(fd, freeblock * BSIZE, SEEK_SET);
+                write(fd, fbuf, BSIZE);
+
+                // 关键一步：把这个真实代码块的物理块号，登记到内存的“索引表”里
+                indirect_array[blk_idx - NDIRECT] = freeblock;
+                freeblock++;
+            }
+            else
+            {
+                printf("致命错误: 文件 %s 超过了一级间接块的物理极限 (268KB)！\n", shortname);
                 break;
             }
-            // 把数据写进物理块
-            lseek(fd, freeblock * BSIZE, SEEK_SET);
-            write(fd, fbuf, BSIZE);
 
-            // 记录到 Inode 中
-            fin.addrs[blk_idx++] = freeblock;
             fin.size += cc;
-            freeblock++; // 消耗了一个数据块
+            blk_idx++;
         }
         close(ffd);
+
+        // 🌟 终极补刀：如果文件用到了间接块，必须把内存里写好的“索引表”，一把刷进刚才分配的那个指针块里
+        if (blk_idx > NDIRECT)
+        {
+            lseek(fd, fin.addrs[NDIRECT] * BSIZE, SEEK_SET);
+            write(fd, indirect_array, sizeof(indirect_array));
+        }
+
+        // 把这个文件的 Inode 写进磁盘的 Inode 区... (保持原样)
 
         // 把这个文件的 Inode 写进磁盘的 Inode 区
         lseek(fd, 32 * BSIZE + freeinode * sizeof(struct dinode), SEEK_SET);

@@ -31,6 +31,8 @@ extern uint64 sys_chdir(void);
 extern uint64 sys_pipe(void);
 extern uint64 sys_dup(void);
 extern uint64 sys_unlink(void);
+extern uint64 sys_sbrk(void);
+extern uint64 sys_lseek(void);
 // extern uint64 sys_wait(void);
 
 static uint64 (*syscalls[30])(void) = {
@@ -49,19 +51,52 @@ static uint64 (*syscalls[30])(void) = {
     [SYS_pipe] = sys_pipe,
     [SYS_dup] = sys_dup,
     [SYS_unlink] = sys_unlink,
+    [SYS_sbrk] = sys_sbrk,
+    [SYS_lseek] = sys_lseek,
 };
 
 /* ================================================================
  * syscall — 系统调用分发主函数（由 usertrap 调用）
  * ================================================================ */
+
+int syscallcnt = 0;
+
 void syscall(void)
 {
     struct proc *p = myproc();
     int num = p->trapframe->a7;
+
+    // int is_target = 0;
+    // // uint64 a0_val = p->trapframe->a0;
+    // if (num == 16 && p->trapframe->a0 == 0)
+    // {
+    //     p->trapframe->a0 = 2;
+    // }
+    // if (num == SYS_open || num == SYS_lseek || num == SYS_close ||
+    //     (num == SYS_write && a0_val != 1 && a0_val != 0))
+    // {
+    //     is_target = 1;
+    //     printf("[SYSCALL TRACE] 发起 syscall %d, a0=%d, a1=0x%lx, a2=%d",
+    //            num, (int)a0_val, p->trapframe->a1, p->trapframe->a2);
+    // }
+
     if (1 <= num && num < NELEM(syscalls) && syscalls[num] != 0)
         p->trapframe->a0 = syscalls[num]();
     else
         p->trapframe->a0 = -1;
+    // int ret = (int)p->trapframe->a0;
+
+    // // 2. 打印追踪结果
+    // if (is_target)
+    // {
+    //     printf("  => 返回值: %d\n", ret);
+    // }
+    // else if (ret == -1 && syscallcnt <= 40)
+    // {
+    //     // 🚨 3. 抓捕所有返回 -1 的漏网之鱼！
+    //     printf("\n[BUG ALARM] 抓到真凶！syscall %d 返回了 -1! (调用时 a0=%d)\n", num, (int)a0_val);
+    //     syscallcnt++;
+    // }
 }
 
 static uint64 argraw(int n)
@@ -98,29 +133,47 @@ int argaddr(int n, uint64 *ap)
     return 0;
 }
 
-// 这是一个模拟 walkaddr 的逻辑，你需要根据你的页表实现来写
+int argfd(int n, int *pfd, struct file **pf)
+{
+    int fd;
+    struct file *f;
+
+    // 1. 获取第 n 个参数（也就是用户传进来的 fd 整数值）
+    if (argint(n, &fd) < 0)
+        return -1;
+
+    // 2. 越界与有效性检查
+    // NOFILE 是进程最大打开文件数（通常定义在 param.h 里，比如 16）
+    // myproc()->ofile[fd] 检查该位置是否真的分配了文件结构体
+    if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+        return -1;
+
+    // 3. 安检通过，将结果填入指针并返回
+    if (pfd)
+        *pfd = fd;
+    if (pf)
+        *pf = f;
+
+    return 0;
+}
+
 int fetchstr(uint64 s, char *dst, int max)
 {
     struct proc *p = myproc();
-    // 利用 walkaddr 顺着当前老进程的页表查出物理地址，然后安全搬运
-    // 如果你没有 walkaddr，可以用你自己写的 walk(p->pagetable, s, 0) 算出物理地址 pa
-    uint64 va = PGROUNDDOWN(s);
-    uint64 offset = s - va;
-
-    pte_t *pte = walk(p->pagetable, va, 0);
-    if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
-        return -1;
-
-    uint64 pa = PTE2PA(*pte);
-    char *src = (char *)(pa + offset);
-
-    // 开始搬运字符串直到遇到 \0 或者满了
     int i = 0;
     while (i < max)
     {
-        dst[i] = src[i];
-        if (src[i] == '\0')
-            return i; // 返回字符串长度
+        uint64 va = s + i;
+        uint64 page_va = PGROUNDDOWN(va);
+        uint64 offset = va - page_va;
+        pte_t *pte = walk(p->pagetable, page_va, 0);
+        if (pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0)
+            return -1;
+        uint64 pa = PTE2PA(*pte);
+        char *src_byte = (char *)(pa + offset);
+        dst[i] = *src_byte;
+        if (*src_byte == '\0')
+            return i;
         i++;
     }
     return -1;

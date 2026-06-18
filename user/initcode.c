@@ -2,7 +2,14 @@
 typedef unsigned long uint64;
 
 #include "proc.h"
-#define BUF_SIZE 128
+
+#define LINE_SIZE 128
+#define MAX_ARGS 16
+#define STDIN_FD 0
+#define STDOUT_FD 1
+
+static char input_buf[LINE_SIZE];
+static char cwd_path[LINE_SIZE] = "/";
 
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
 {
@@ -17,361 +24,419 @@ static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
     return a0_asm;
 }
 
-int str_len(const char *s)
+static int str_len(const char *s)
 {
     int len = 0;
-    while (s[len] != '\0')
+    while (s[len])
         len++;
     return len;
 }
 
-int str_cmp(const char *s1, const char *s2)
+static int str_cmp(const char *a, const char *b)
 {
-    while (*s1 && (*s1 == *s2))
+    while (*a && *a == *b)
     {
-        s1++;
-        s2++;
+        a++;
+        b++;
     }
-    return *(unsigned char *)s1 - *(unsigned char *)s2;
+    return *(const unsigned char *)a - *(const unsigned char *)b;
 }
 
-int parse_args(char *buf, char **argv)
+static int has_slash(const char *s)
+{
+    while (*s)
+    {
+        if (*s++ == '/')
+            return 1;
+    }
+    return 0;
+}
+
+static void write_bytes(const char *s, int n)
+{
+    syscall(SYS_write, STDOUT_FD, (uint64)s, (uint64)n);
+}
+
+static void write_str(const char *s)
+{
+    write_bytes(s, str_len(s));
+}
+
+static void write_char(char c)
+{
+    syscall(SYS_write, STDOUT_FD, (uint64)&c, 1);
+}
+
+static void move_left(int count)
+{
+    static const char left[] = {27, '[', 'D'};
+    while (count-- > 0)
+        write_bytes(left, 3);
+}
+
+static void move_right(void)
+{
+    static const char right[] = {27, '[', 'C'};
+    write_bytes(right, 3);
+}
+
+static void print_prompt(void)
+{
+    write_str("MyOS:");
+    write_str(cwd_path);
+    write_str("> ");
+}
+
+static void clear_args(char **argv)
+{
+    for (int i = 0; i < MAX_ARGS; i++)
+        argv[i] = 0;
+}
+
+static int parse_args(char *line, char **argv)
 {
     int argc = 0;
     int in_token = 0;
 
-    for (int i = 0; buf[i] != '\0'; i++)
+    clear_args(argv);
+    for (int i = 0; line[i]; i++)
     {
-        if (buf[i] == ' ' || buf[i] == '\t')
+        if (line[i] == ' ' || line[i] == '\t')
         {
-            buf[i] = '\0';
+            line[i] = '\0';
             in_token = 0;
         }
         else if (!in_token)
         {
-            if (argc < 16)
-                argv[argc++] = &buf[i];
+            if (argc < MAX_ARGS - 1)
+                argv[argc++] = &line[i];
             in_token = 1;
         }
     }
+    argv[argc] = 0;
     return argc;
 }
 
-void update_path(char *cwd, const char *target)
+static int handle_arrow(int esc_state, char c, int *cursor, int len)
+{
+    if (esc_state == 1)
+        return c == '[' ? 2 : 0;
+
+    if (esc_state != 2)
+        return 0;
+
+    if (c == 'D' && *cursor > 0)
+    {
+        (*cursor)--;
+        move_left(1);
+    }
+    else if (c == 'C' && *cursor < len)
+    {
+        (*cursor)++;
+        move_right();
+    }
+    return 0;
+}
+
+static void erase_before_cursor(char *line, int *len, int *cursor)
+{
+    if (*cursor <= 0)
+        return;
+
+    int tail = *len - *cursor;
+    for (int i = 0; i < tail; i++)
+        line[*cursor - 1 + i] = line[*cursor + i];
+
+    (*cursor)--;
+    (*len)--;
+    move_left(1);
+    if (tail > 0)
+        write_bytes(line + *cursor, tail);
+    write_char(' ');
+    move_left(tail + 1);
+}
+
+static void insert_at_cursor(char *line, int *len, int *cursor, char c)
+{
+    if (*len >= LINE_SIZE - 1)
+        return;
+
+    int tail = *len - *cursor;
+    for (int i = tail - 1; i >= 0; i--)
+        line[*cursor + 1 + i] = line[*cursor + i];
+
+    line[*cursor] = c;
+    (*len)++;
+    write_bytes(line + *cursor, tail + 1);
+    (*cursor)++;
+    move_left(tail);
+}
+
+static int read_line(char *line)
+{
+    int len = 0;
+    int cursor = 0;
+    int esc_state = 0;
+
+    for (;;)
+    {
+        char c;
+        int n = syscall(SYS_read, STDIN_FD, (uint64)&c, 1);
+        if (n <= 0)
+            continue;
+
+        if (c == 27)
+        {
+            esc_state = 1;
+            continue;
+        }
+        if (esc_state)
+        {
+            esc_state = handle_arrow(esc_state, c, &cursor, len);
+            continue;
+        }
+
+        if (c == '\n')
+        {
+            line[len] = '\0';
+            write_char('\n');
+            return len;
+        }
+        if (c == 127 || c == '\b')
+        {
+            erase_before_cursor(line, &len, &cursor);
+            continue;
+        }
+        insert_at_cursor(line, &len, &cursor, c);
+    }
+}
+
+static void update_cwd_display(const char *target)
 {
     if (target[0] == '/')
     {
         int i = 0;
-        while (target[i] != '\0' && i < 127)
+        while (target[i] && i < LINE_SIZE - 1)
         {
-            cwd[i] = target[i];
+            cwd_path[i] = target[i];
             i++;
         }
-        cwd[i] = '\0';
+        cwd_path[i] = '\0';
+        return;
     }
-    else if (str_cmp(target, "..") == 0)
+
+    if (str_cmp(target, ".") == 0)
+        return;
+
+    if (str_cmp(target, "..") == 0)
     {
-        int len = str_len(cwd);
-        if (len > 1)
-        {
-            int i = len - 1;
-            while (i > 0 && cwd[i] != '/')
-                i--;
-            if (i == 0)
-                cwd[1] = '\0';
-            else
-                cwd[i] = '\0';
-        }
+        int len = str_len(cwd_path);
+        if (len <= 1)
+            return;
+
+        int i = len - 1;
+        while (i > 0 && cwd_path[i] != '/')
+            i--;
+        if (i == 0)
+            cwd_path[1] = '\0';
+        else
+            cwd_path[i] = '\0';
+        return;
     }
-    else if (str_cmp(target, ".") == 0)
-    {
-    }
-    else
-    {
-        int len = str_len(cwd);
-        if (cwd[len - 1] != '/')
-            cwd[len++] = '/';
-        int i = 0;
-        while (target[i] != '\0' && len < 127)
-        {
-            cwd[len++] = target[i];
-            i++;
-        }
-        cwd[len] = '\0';
-    }
+
+    int len = str_len(cwd_path);
+    if (len > 1 && cwd_path[len - 1] != '/')
+        cwd_path[len++] = '/';
+    for (int i = 0; target[i] && len < LINE_SIZE - 1; i++)
+        cwd_path[len++] = target[i];
+    cwd_path[len] = '\0';
 }
 
-// 🚨 瘦身核心：抽离执行逻辑，大幅减少生成的汇编代码体积！
-void execute_cmd(char **argv)
+static int run_builtin(int argc, char **argv)
 {
-    syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
-    if (argv[0][0] != '/')
+    if (str_cmp(argv[0], "cd") == 0)
     {
-        char abs_path[64];
-        abs_path[0] = '/';
-        int j = 0;
-        while (argv[0][j] != '\0' && j < 60)
+        if (argc >= 2)
         {
-            abs_path[j + 1] = argv[0][j];
-            j++;
+            if ((int)syscall(SYS_chdir, (uint64)argv[1], 0, 0) == 0)
+                update_cwd_display(argv[1]);
+            else
+                write_str("cd: cannot cd\n");
         }
-        abs_path[j + 1] = '\0';
-        syscall(SYS_exec, (uint64)abs_path, (uint64)argv, 0);
+        return 1;
     }
-    char exec_err[] = "Command not found!\n";
-    syscall(SYS_write, 1, (uint64)exec_err, str_len(exec_err));
+
+    if (str_cmp(argv[0], "pwd") == 0)
+    {
+        write_str(cwd_path);
+        write_char('\n');
+        return 1;
+    }
+
+    return 0;
+}
+
+static int join_path(char *dst, const char *prefix, const char *name)
+{
+    int n = 0;
+    for (int i = 0; prefix[i] && n < LINE_SIZE - 1; i++)
+        dst[n++] = prefix[i];
+    for (int i = 0; name[i] && n < LINE_SIZE - 1; i++)
+        dst[n++] = name[i];
+    dst[n] = '\0';
+    return n < LINE_SIZE - 1;
+}
+
+static void exec_command(char **argv)
+{
+    static const char *paths[] = {"/bin/", "/usr/bin/", "/", 0};
+    char path[LINE_SIZE];
+
+    if (argv[0] == 0)
+        syscall(SYS_exit, -1, 0, 0);
+
+    if (has_slash(argv[0]))
+        syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
+    else
+    {
+        syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
+        for (int i = 0; paths[i]; i++)
+        {
+            if (join_path(path, paths[i], argv[0]))
+                syscall(SYS_exec, (uint64)path, (uint64)argv, 0);
+        }
+    }
+
+    write_str("Command not found!\n");
     syscall(SYS_exit, -1, 0, 0);
 }
 
-const char prompt[] = "MyOS:/> ";
-const char help_msg[] = "Available commands:\n  help - Show this message\n  echo - Repeat input\n  clear- Clear screen\n";
-const char newline[] = "\n";
-const char unknown[] = "Unknown command. Type 'help'.\n";
-const char back_seq[] = {'\b', ' ', '\b'};
-const char clear_seq[] = {27, '[', '2', 'J', 27, '[', 'H'};
-const char echo_stub[] = "Echo what?\n";
-
-char input_buf[128];
-
-void main()
+static int find_token(char **argv, const char *token)
 {
-    uint64 p_prompt, p_help, p_newline, p_unknown, p_buf, p_back, p_clear, p_echo;
-    __asm__ volatile("lla %0, prompt" : "=r"(p_prompt));
-    __asm__ volatile("lla %0, help_msg" : "=r"(p_help));
-    __asm__ volatile("lla %0, newline" : "=r"(p_newline));
-    __asm__ volatile("lla %0, unknown" : "=r"(p_unknown));
-    __asm__ volatile("lla %0, input_buf" : "=r"(p_buf));
-    __asm__ volatile("lla %0, back_seq" : "=r"(p_back));
-    __asm__ volatile("lla %0, clear_seq" : "=r"(p_clear));
-    __asm__ volatile("lla %0, echo_stub" : "=r"(p_echo));
-
-    char *buf = (char *)p_buf;
-    int buf_idx = 0;
-    char *argv[16];
-    int argc = 0;
-    char cwd_path[128] = "/";
-    while (1)
+    for (int i = 0; argv[i]; i++)
     {
-        char prompt_head[] = "MyOS:";
-        char prompt_tail[] = "> ";
-        syscall(SYS_write, 1, (uint64)prompt_head, str_len(prompt_head));
-        syscall(SYS_write, 1, (uint64)cwd_path, str_len(cwd_path));
-        syscall(SYS_write, 1, (uint64)prompt_tail, str_len(prompt_tail));
+        if (str_cmp(argv[i], token) == 0)
+            return i;
+    }
+    return -1;
+}
 
-        buf_idx = 0;
-        int cursor = 0;
-        int shell_esc_state = 0;
-        const char c_left[] = {27, '[', 'D'};
-        const char c_right[] = {27, '[', 'C'};
-        for (int i = 0; i < 16; i++)
-        {
-            argv[i] = 0;
-        }
-        while (1)
-        {
-            char c;
-            int n = syscall(SYS_read, 0, (uint64)&c, 1);
-            if (n <= 0)
-                continue;
+static void wait_for_child(void)
+{
+    int status;
+    syscall(SYS_wait, (uint64)&status, 0, 0);
+}
 
-            if (c == 27)
-            {
-                shell_esc_state = 1;
-                continue;
-            }
-            if (shell_esc_state == 1 && c == '[')
-            {
-                shell_esc_state = 2;
-                continue;
-            }
-            if (shell_esc_state == 2)
-            {
-                shell_esc_state = 0;
-                if (c == 'D')
-                {
-                    if (cursor > 0)
-                    {
-                        cursor--;
-                        syscall(SYS_write, 1, (uint64)c_left, 3);
-                    }
-                }
-                else if (c == 'C')
-                {
-                    if (cursor < buf_idx)
-                    {
-                        cursor++;
-                        syscall(SYS_write, 1, (uint64)c_right, 3);
-                    }
-                }
-                continue;
-            }
-            if (shell_esc_state != 0 && c != 27 && c != '[')
-                shell_esc_state = 0;
+static void redirect_stdout_if_needed(char **argv)
+{
+    int redirect = find_token(argv, ">");
+    if (redirect < 0)
+        return;
 
-            if (c == '\n')
-            {
-                buf[buf_idx] = '\0';
-                syscall(SYS_write, 1, p_newline, 1);
-                break;
-            }
-            else if (c == 127 || c == '\b')
-            {
-                if (cursor > 0)
-                {
-                    int move_len = buf_idx - cursor;
-                    for (int i = 0; i < move_len; i++)
-                        buf[cursor - 1 + i] = buf[cursor + i];
-                    cursor--;
-                    buf_idx--;
-                    syscall(SYS_write, 1, (uint64)c_left, 3);
-                    if (move_len > 0)
-                        syscall(SYS_write, 1, (uint64)(buf + cursor), move_len);
-                    char space = ' ';
-                    syscall(SYS_write, 1, (uint64)&space, 1);
-                    for (int i = 0; i < move_len + 1; i++)
-                        syscall(SYS_write, 1, (uint64)c_left, 3);
-                }
-            }
-            else
-            {
-                if (buf_idx < 127)
-                {
-                    int move_len = buf_idx - cursor;
-                    for (int i = move_len - 1; i >= 0; i--)
-                        buf[cursor + 1 + i] = buf[cursor + i];
-                    buf[cursor] = c;
-                    buf_idx++;
-                    syscall(SYS_write, 1, (uint64)(buf + cursor), move_len + 1);
-                    cursor++;
-                    for (int i = 0; i < move_len; i++)
-                        syscall(SYS_write, 1, (uint64)c_left, 3);
-                }
-            }
-        }
+    if (argv[redirect + 1] == 0)
+    {
+        write_str("syntax error: expected file after >\n");
+        syscall(SYS_exit, -1, 0, 0);
+    }
 
-        if (buf_idx == 0)
+    syscall(SYS_close, STDOUT_FD, 0, 0);
+    if ((int)syscall(SYS_open, (uint64)argv[redirect + 1], 0x201, 0) < 0)
+        syscall(SYS_exit, -1, 0, 0);
+    argv[redirect] = 0;
+}
+
+static void run_simple(char **argv)
+{
+    int pid = syscall(SYS_fork, 0, 0, 0);
+    if (pid < 0)
+    {
+        write_str("Fork failed!\n");
+        return;
+    }
+    if (pid == 0)
+    {
+        redirect_stdout_if_needed(argv);
+        exec_command(argv);
+    }
+    wait_for_child();
+}
+
+static void run_pipeline(char **argv, int pipe_at)
+{
+    int fds[2];
+    char **right_argv = &argv[pipe_at + 1];
+
+    argv[pipe_at] = 0;
+    if (argv[0] == 0 || right_argv[0] == 0)
+    {
+        write_str("syntax error: invalid pipe\n");
+        return;
+    }
+
+    if (syscall(SYS_pipe, (uint64)fds, 0, 0) < 0)
+    {
+        write_str("Pipe creation failed!\n");
+        return;
+    }
+
+    int left_pid = syscall(SYS_fork, 0, 0, 0);
+    if (left_pid == 0)
+    {
+        syscall(SYS_close, STDOUT_FD, 0, 0);
+        syscall(SYS_dup, fds[1], 0, 0);
+        syscall(SYS_close, fds[0], 0, 0);
+        syscall(SYS_close, fds[1], 0, 0);
+        exec_command(argv);
+    }
+
+    int right_pid = syscall(SYS_fork, 0, 0, 0);
+    if (right_pid == 0)
+    {
+        syscall(SYS_close, STDIN_FD, 0, 0);
+        syscall(SYS_dup, fds[0], 0, 0);
+        syscall(SYS_close, fds[1], 0, 0);
+        syscall(SYS_close, fds[0], 0, 0);
+        exec_command(right_argv);
+    }
+
+    syscall(SYS_close, fds[0], 0, 0);
+    syscall(SYS_close, fds[1], 0, 0);
+    wait_for_child();
+    wait_for_child();
+}
+
+static void dispatch_command(int argc, char **argv)
+{
+    int pipe_at;
+
+    if (argc == 0 || run_builtin(argc, argv))
+        return;
+
+    pipe_at = find_token(argv, "|");
+    if (pipe_at >= 0)
+        run_pipeline(argv, pipe_at);
+    else
+        run_simple(argv);
+}
+
+void main(void)
+{
+    char *argv[MAX_ARGS];
+
+    for (;;)
+    {
+        int argc;
+
+        print_prompt();
+        if (read_line(input_buf) == 0)
             continue;
-        argc = parse_args(buf, argv);
-        if (argc == 0)
-            continue;
-        if (str_cmp(argv[0], "cd") == 0)
-        {
-            if (argc < 2)
-                continue;
-            if ((int)syscall(SYS_chdir, (uint64)argv[1], 0, 0) == 0)
-                update_path(cwd_path, argv[1]);
-            else
-            {
-                char cd_err[] = "cd: cannot cd\n";
-                syscall(SYS_write, 1, (uint64)cd_err, str_len(cd_err));
-            }
-            continue;
-        }
-        if (str_cmp(argv[0], "pwd") == 0)
-        {
-            syscall(SYS_write, 1, (uint64)cwd_path, str_len(cwd_path));
-            syscall(SYS_write, 1, p_newline, 1);
-            continue;
-        }
 
-        // ==========================================================
-        // 🌟 1. 扫描管道
-        // ==========================================================
-        int pipe_idx = -1;
-        for (int i = 0; argv[i] != 0; i++)
-        {
-            if (str_cmp(argv[i], "|") == 0)
-            {
-                pipe_idx = i;
-                break;
-            }
-        }
-
-        if (pipe_idx != -1)
-        {
-            argv[pipe_idx] = 0;
-            char **right_argv = &argv[pipe_idx + 1];
-            int p[2];
-
-            if (syscall(SYS_pipe, (uint64)p, 0, 0) < 0)
-            {
-                char err[] = "Pipe creation failed!\n";
-                syscall(SYS_write, 1, (uint64)err, str_len(err));
-                continue;
-            }
-
-            int pid_left = syscall(SYS_fork, 0, 0, 0);
-            if (pid_left == 0)
-            {
-                syscall(SYS_close, 1, 0, 0);
-                syscall(SYS_dup, p[1], 0, 0);
-                syscall(SYS_close, p[0], 0, 0);
-                syscall(SYS_close, p[1], 0, 0);
-                execute_cmd(argv); // 🚨 调用瘦身函数！
-            }
-
-            int pid_right = syscall(SYS_fork, 0, 0, 0);
-            if (pid_right == 0)
-            {
-                syscall(SYS_close, 0, 0, 0);
-                syscall(SYS_dup, p[0], 0, 0);
-                syscall(SYS_close, p[1], 0, 0);
-                syscall(SYS_close, p[0], 0, 0);
-                execute_cmd(right_argv); // 🚨 调用瘦身函数！
-            }
-
-            syscall(SYS_close, p[0], 0, 0);
-            syscall(SYS_close, p[1], 0, 0);
-
-            int status;
-            syscall(SYS_wait, (uint64)&status, 0, 0);
-            syscall(SYS_wait, (uint64)&status, 0, 0);
-            continue;
-        }
-
-        // ==========================================================
-        // 🌟 2. 单一命令及重定向
-        // ==========================================================
-        int pid = syscall(SYS_fork, 0, 0, 0);
-        if (pid < 0)
-        {
-            char fork_err[] = "Fork failed!\n";
-            syscall(SYS_write, 1, (uint64)fork_err, str_len(fork_err));
-        }
-        else if (pid == 0)
-        {
-            int i = 0;
-            while (argv[i] != 0)
-            {
-                if (str_cmp(argv[i], ">") == 0)
-                {
-                    if (argv[i + 1] == 0)
-                    {
-                        char err[] = "syntax error: expected file after >\n";
-                        syscall(SYS_write, 1, (uint64)err, str_len(err));
-                        syscall(SYS_exit, -1, 0, 0);
-                    }
-                    char *filename = argv[i + 1];
-                    syscall(SYS_close, 1, 0, 0);
-                    int fd = syscall(SYS_open, (uint64)filename, 0x201, 0);
-                    if (fd < 0)
-                        syscall(SYS_exit, -1, 0, 0);
-                    argv[i] = 0;
-                    break;
-                }
-                i++;
-            }
-            execute_cmd(argv); // 🚨 调用瘦身函数！
-        }
-        else
-        {
-            int status;
-            syscall(SYS_wait, (uint64)&status, 0, 0);
-        }
+        argc = parse_args(input_buf, argv);
+        dispatch_command(argc, argv);
     }
 }
 
-void __attribute__((naked, section(".text.entry"))) _start()
+void __attribute__((naked, section(".text.entry"))) _start(void)
 {
     __asm__ volatile("call main");
 }
