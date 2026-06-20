@@ -31,6 +31,9 @@
 #ifndef O_RDWR
 #define O_RDWR 0x002
 #endif
+#ifndef O_TRUNC
+#define O_TRUNC 0x400
+#endif
 
 struct superblock
 {

@@ -78,11 +78,10 @@ uint64 sys_getpid(void)
  *   5. 调用 swtch 切回调度器：swtch(&p->context, &mycpu()->context);
  * ================================================================ */
 
-uint64 sys_exit(void)
+void proc_exit(int status)
 {
   struct proc *p = myproc();
-  argint(0, &p->xstate);
-  // 1. 记录退出码
+  p->xstate = status;
   p->status = TASK_ZOMBIE;
   for (int fd = 0; fd < NOFILE; fd++)
   {
@@ -105,6 +104,14 @@ uint64 sys_exit(void)
   acquire(&p->lock);
   sched();
   panic("exit reached unreachable code");
+}
+
+uint64 sys_exit(void)
+{
+  int status;
+  argint(0, &status);
+  proc_exit(status);
+  return 0;
 }
 
 /* ================================================================
@@ -252,11 +259,20 @@ uint64 sys_wait(void)
           pid = son->pid;
           if (addr != 0)
           {
-            // ... 写回 son->xstate ...
+            int xstate = son->xstate;
+            if (copyout(p->pagetable, addr, (char *)&xstate, sizeof(xstate)) < 0)
+            {
+              release(&son->lock);
+              release(&p->lock);
+              return -1;
+            }
           }
           son->status = TASK_FREE;
           son->pid = 0;
           son->parent = 0;
+          son->killed = 0;
+          son->xstate = 0;
+          son->chan = 0;
 
           release(&son->lock);
           release(&p->lock);

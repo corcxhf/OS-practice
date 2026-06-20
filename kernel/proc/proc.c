@@ -125,9 +125,16 @@ struct proc *allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->killed = 0;
+  p->xstate = 0;
+  p->chan = 0;
+  p->parent = 0;
+  p->name = 0;
+  p->sz = 0;
   if ((p->trapframe = kalloc()) == 0)
   {
     p->status = TASK_FREE;
+    release(&p->lock);
     return 0;
   }
   p->status = TASK_ALLOCATED;

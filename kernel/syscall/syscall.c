@@ -33,6 +33,7 @@ extern uint64 sys_dup(void);
 extern uint64 sys_unlink(void);
 extern uint64 sys_sbrk(void);
 extern uint64 sys_lseek(void);
+extern uint64 sys_ioctl(void);
 // extern uint64 sys_wait(void);
 
 static uint64 (*syscalls[30])(void) = {
@@ -53,6 +54,7 @@ static uint64 (*syscalls[30])(void) = {
     [SYS_unlink] = sys_unlink,
     [SYS_sbrk] = sys_sbrk,
     [SYS_lseek] = sys_lseek,
+    [SYS_ioctl] = sys_ioctl,
 };
 
 /* ================================================================

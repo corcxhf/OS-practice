@@ -22,15 +22,31 @@ CFLAGS = -nostdlib -fno-builtin -mcmodel=medany \
 U = user
 K = kernel
 
-TINYCC_DIR = tinycc
+BUILD_DIR = build
+PORTS_DIR = ports
+TINYCC_DIR = $(PORTS_DIR)/tinycc
+NEATVI_DIR = $(PORTS_DIR)/neatvi
+TESTS_DIR = tests
+LIBC_CONTRACT_SOURCE = $(TESTS_DIR)/libc_contract.c
+FS_CONTRACT_SOURCE = $(TESTS_DIR)/fs_contract.c
+TTY_CONTRACT_SOURCE = $(TESTS_DIR)/tty_contract.c
 TCC_USER_CC ?= riscv64-linux-gnu-gcc
 TCC_USER_AR ?= riscv64-linux-gnu-ar
+PORT_USER_CC ?= $(TCC_USER_CC)
 TCC_RUNTIME_CC ?= $(CC)
 TCC_RUNTIME_AR ?= $(CROSS)ar
-TCC_USER = tcc
+TCC_USER = $(BUILD_DIR)/tcc
+VI_USER = $(BUILD_DIR)/vi
 TCC_PREDEFS = $(TINYCC_DIR)/tccdefs_.h
-TCC_C2STR = $(TINYCC_DIR)/c2str.exe
-TCC_RUNTIME = crt1.o crti.o crtn.o libc.a
+TCC_C2STR = $(BUILD_DIR)/c2str.exe
+TCC_RUNTIME = $(BUILD_DIR)/crt1.o $(BUILD_DIR)/crti.o $(BUILD_DIR)/crtn.o $(BUILD_DIR)/libc.a
+TCC_INCLUDE_DIR = $(TINYCC_DIR)/myos-include
+TCC_HEADERS = $(wildcard $(TCC_INCLUDE_DIR)/*.h) $(wildcard $(TCC_INCLUDE_DIR)/sys/*.h)
+UPROG_IMAGE_ARGS = $(foreach prog,$(UPROGS),$(prog)=/bin/$(notdir $(prog)))
+TCC_IMAGE_ARGS = $(TCC_USER)=/bin/tcc $(foreach file,$(TCC_RUNTIME),$(file)=/lib/$(notdir $(file)))
+TCC_HEADER_IMAGE_ARGS = $(foreach hdr,$(TCC_HEADERS),$(hdr)=/include/$(patsubst $(TCC_INCLUDE_DIR)/%,%,$(hdr)))
+PORT_BINARY_IMAGE_ARGS = $(VI_USER)=/bin/vi
+TEST_SOURCE_IMAGE_ARGS = $(LIBC_CONTRACT_SOURCE)=/src/tests/libc_ct.c $(FS_CONTRACT_SOURCE)=/src/tests/fs_ct.c $(TTY_CONTRACT_SOURCE)=/src/tests/tty_ct.c
 TCC_RUNTIME_CFLAGS = -Os -nostdlib -fno-builtin -ffreestanding \
     -mno-relax -msmall-data-limit=0 -fno-pic -fno-pie \
     -mcmodel=medany -march=rv64gc -mabi=lp64d
@@ -39,12 +55,20 @@ TCC_USER_DEPS = \
     $(wildcard $(TINYCC_DIR)/*.c) \
     $(wildcard $(TINYCC_DIR)/*.h) \
     $(wildcard $(K)/include/*.h)
+NEATVI_SRCS = $(filter-out $(NEATVI_DIR)/stag.c,$(wildcard $(NEATVI_DIR)/*.c))
+NEATVI_DEPS = $(NEATVI_SRCS) $(wildcard $(NEATVI_DIR)/*.h)
 TCC_USER_CFLAGS = -Os -static -nostdlib -fno-builtin \
     -mno-relax -msmall-data-limit=0 \
     -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-e,_start -Wl,-s \
     -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I. -I$(abspath $(K)/include) \
     -DONE_SOURCE -DCONFIG_TCC_PREDEFS=1 -DTCC_TARGET_RISCV64
+PORT_USER_CFLAGS = -Os -static -nostdlib -fno-builtin -ffreestanding \
+    -mno-relax -msmall-data-limit=0 -fno-pic -fno-pie \
+    -mcmodel=medany -march=rv64gc -mabi=lp64d \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-e,_start -Wl,-s \
+    -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
+    -I$(TCC_INCLUDE_DIR)
 
 SRCS = \
     $K/boot/entry.S \
@@ -106,36 +130,42 @@ $U/_%: $U/%.o $(ULIB) $U/user.ld
 
 all: $(KERNEL)
 
+$(BUILD_DIR):
+	mkdir -p $@
+
 mkfs: mkfs.c
 	gcc mkfs.c -o mkfs
 
-$(TCC_C2STR): $(TINYCC_DIR)/conftest.c
+$(TCC_C2STR): $(TINYCC_DIR)/conftest.c | $(BUILD_DIR)
 	gcc -DC2STR $< -o $@
 
 $(TCC_PREDEFS): $(TINYCC_DIR)/include/tccdefs.h $(TCC_C2STR)
 	$(TCC_C2STR) $< $@
 
-$(TCC_USER): $(TCC_USER_DEPS)
-	cd $(TINYCC_DIR) && $(TCC_USER_CC) $(TCC_USER_CFLAGS) malloc.c glue.c tcc.c -o ../$(TCC_USER) -lgcc
+$(TCC_USER): $(TCC_USER_DEPS) | $(BUILD_DIR)
+	cd $(TINYCC_DIR) && $(TCC_USER_CC) $(TCC_USER_CFLAGS) malloc.c glue.c tcc.c -o $(abspath $@) -lgcc
 
-crt1.o: $(TINYCC_DIR)/myos-crt1.S
+$(BUILD_DIR)/crt1.o: $(TINYCC_DIR)/myos-crt1.S | $(BUILD_DIR)
 	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
 
-crti.o: $(TINYCC_DIR)/myos-crti.S
+$(BUILD_DIR)/crti.o: $(TINYCC_DIR)/myos-crti.S | $(BUILD_DIR)
 	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
 
-crtn.o: $(TINYCC_DIR)/myos-crtn.S
+$(BUILD_DIR)/crtn.o: $(TINYCC_DIR)/myos-crtn.S | $(BUILD_DIR)
 	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
 
-$(TINYCC_DIR)/myos-libc.o: $(TINYCC_DIR)/myos-libc.c
+$(BUILD_DIR)/myos-libc.o: $(TINYCC_DIR)/myos-libc.c | $(BUILD_DIR)
 	$(TCC_RUNTIME_CC) $(TCC_RUNTIME_CFLAGS) -c $< -o $@
 
-libc.a: $(TINYCC_DIR)/myos-libc.o
+$(BUILD_DIR)/libc.a: $(BUILD_DIR)/myos-libc.o | $(BUILD_DIR)
 	$(TCC_RUNTIME_AR) rcs $@ $<
 
-fs.img: mkfs $(UPROGS) $(TCC_USER) $(TCC_RUNTIME)
+$(VI_USER): $(NEATVI_DEPS) $(TINYCC_DIR)/myos-crt1.S $(TINYCC_DIR)/myos-libc.c $(TCC_HEADERS) | $(BUILD_DIR)
+	$(PORT_USER_CC) $(PORT_USER_CFLAGS) -I$(NEATVI_DIR) $(TINYCC_DIR)/myos-crt1.S $(NEATVI_SRCS) $(TINYCC_DIR)/myos-libc.c -o $@ -lgcc
+
+fs.img: mkfs $(UPROGS) $(TCC_USER) $(TCC_RUNTIME) $(TCC_HEADERS) $(LIBC_CONTRACT_SOURCE) $(FS_CONTRACT_SOURCE) $(TTY_CONTRACT_SOURCE) $(VI_USER)
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
-	./mkfs fs.img $(UPROGS) ./$(TCC_USER) $(TCC_RUNTIME)
+	./mkfs fs.img $(UPROG_IMAGE_ARGS) $(TCC_IMAGE_ARGS) $(TCC_HEADER_IMAGE_ARGS) $(PORT_BINARY_IMAGE_ARGS) $(TEST_SOURCE_IMAGE_ARGS)
 
 
 $U/initcode.out: $U/initcode.c $U/initcode.ld
@@ -176,7 +206,11 @@ debug: $(KERNEL) fs.img
 	-nographic \
 	-s -S 
 
-clean: 
-	rm -f $(KERNEL) $(TCC_USER) $(TCC_PREDEFS) $(TCC_C2STR) $(TCC_RUNTIME) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d $(TINYCC_DIR)/myos-libc.o mkfs fs.img
+test-qemu: $(KERNEL) fs.img
+	python3 scripts/qemu_smoke.py --kernel $(KERNEL) --fs fs.img
 
-.PHONY: all run debug clean
+clean: 
+	rm -rf $(BUILD_DIR)
+	rm -f $(KERNEL) tcc crt1.o crti.o crtn.o libc.a $(TCC_PREDEFS) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d $(TINYCC_DIR)/myos-libc.o mkfs fs.img
+
+.PHONY: all run debug test-qemu clean

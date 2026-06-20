@@ -5,6 +5,19 @@
 
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2);
 
+int str_len(const char *s)
+{
+    int len = 0;
+    while (s[len])
+        len++;
+    return len;
+}
+
+void write_str(const char *s)
+{
+    syscall(SYS_write, 1, (uint64)s, (uint64)str_len(s));
+}
+
 void do_cat(int fd)
 {
     char buf[512];
@@ -13,14 +26,7 @@ void do_cat(int fd)
     if (fd == 0)
     {
         while ((n = (int)syscall(SYS_read, 0, (uint64)buf, sizeof(buf))) > 0)
-        {
-            for (int i = 0; i < n; i++)
-            {
-                if (buf[i] == 3)
-                    syscall(SYS_exit, 0, 0, 0); // 瞬间断尾，交回控制权
-            }
             syscall(SYS_write, 1, (uint64)buf, (uint64)n);
-        }
     }
     else
     {
@@ -45,7 +51,10 @@ void main(int argc, char *argv[])
         int fd = (int)syscall(SYS_open, (uint64)argv[i], 0, 0);
         if (fd < 0)
         {
-            syscall(SYS_exit, (uint64)-1, 0, 0);
+            write_str("cat: cannot open ");
+            write_str(argv[i]);
+            write_str("\n");
+            continue;
         }
         do_cat(fd);
         syscall(SYS_close, (uint64)fd, 0, 0);

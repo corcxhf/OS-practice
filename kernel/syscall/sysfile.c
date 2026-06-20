@@ -27,9 +27,35 @@ extern void fileclose(struct file *f);
 extern int fdalloc(struct file *f);
 extern void wakeup(void *chan);
 extern void sleep(void *chan, struct spinlock *lk);
+extern int console_pending(void);
 
 extern void acquire(struct spinlock *);
 extern void release(struct spinlock *lk);
+
+#define TIOCINQ 0x541B
+
+uint64 sys_ioctl(void)
+{
+    int fd, request;
+    uint64 arg;
+    struct file *f;
+    struct proc *p = myproc();
+
+    if (argint(0, &fd) < 0 || argint(1, &request) < 0 || argaddr(2, &arg) < 0)
+        return -1;
+    if (fd < 0 || fd >= NOFILE || (f = p->ofile[fd]) == 0)
+        return -1;
+
+    if (request == TIOCINQ && f->type == FD_CONSOLE)
+    {
+        int pending = console_pending();
+        if (arg && copyout(p->pagetable, arg, (char *)&pending, sizeof(pending)) < 0)
+            return -1;
+        return 0;
+    }
+    return -1;
+}
+
 uint64 sys_open(void)
 {
     char path[MAXPATH];
@@ -105,6 +131,11 @@ uint64 sys_open(void)
     }
 
     /* 到此为止，ip 已锁定且是目标文件的有效引用 */
+    if ((flags & O_TRUNC) && ip->type == T_FILE && (flags & (O_WRONLY | O_RDWR)))
+    {
+        ip->size = 0;
+        iupdate(ip);
+    }
 
     /* 5. 分配 file 对象 */
     if ((f = filealloc()) == 0)
@@ -158,6 +189,8 @@ uint64 sys_read(void)
 
         for (i = 0; i < n; i++)
         {
+            if (p->killed)
+                break;
             extern int consgetc(void);
             int c = consgetc();
             if (c < 0)
@@ -223,6 +256,7 @@ int copyinstr(char *dst, uint64 src, int max)
 int pipewrite(struct pipe *pi, uint64 addr, int n)
 {
     int i = 0;
+    struct proc *p = myproc();
     // 🚨 这里的 addr 其实是 sys_write 传进来的内核 buf 地址！
     // 我们直接把它强转成普通的内核字符指针，不需要查表！
     char *kernel_buf = (char *)addr;
@@ -231,6 +265,11 @@ int pipewrite(struct pipe *pi, uint64 addr, int n)
 
     while (i < n)
     {
+        if (p->killed)
+        {
+            release(&pi->lock);
+            return -1;
+        }
         // 嫌疑点 A：如果读端全关了，写数据就没有任何意义了
         if (pi->readopen == 0)
         {
@@ -243,6 +282,11 @@ int pipewrite(struct pipe *pi, uint64 addr, int n)
         {
             wakeup(&pi->nread);
             sleep(&pi->nwrite, &pi->lock);
+            if (p->killed)
+            {
+                release(&pi->lock);
+                return -1;
+            }
         }
         else
         {
@@ -269,6 +313,11 @@ int piperead(struct pipe *pi, uint64 addr, int n)
     // 嫌疑点 A：管道是空的 (nwrite == nread)
     while (pi->nwrite == pi->nread)
     {
+        if (p->killed)
+        {
+            release(&pi->lock);
+            return -1;
+        }
         // 如果管道空了，且写端已经被全部 close 掉了
         if (pi->writeopen == 0)
         {
@@ -279,6 +328,11 @@ int piperead(struct pipe *pi, uint64 addr, int n)
         // 如果写端没关，纯粹是还没来得及写数据，读端就睡在 pi->nread 上
         wakeup(&pi->nwrite); // 顺手唤醒可能因为管满而卡住的写端
         sleep(&pi->nread, &pi->lock);
+        if (p->killed)
+        {
+            release(&pi->lock);
+            return -1;
+        }
     }
 
     // 2. 管道里有数据，开始读

@@ -3,13 +3,26 @@ typedef unsigned long uint64;
 
 #include "proc.h"
 
-#define LINE_SIZE 128
-#define MAX_ARGS 16
+#define LINE_SIZE 256
+#define PATH_SIZE 128
+#define MAX_ARGS 32
+#define MAX_STAGES MAX_ARGS
+#define TOKEN_BUF_SIZE (LINE_SIZE * 2)
 #define STDIN_FD 0
 #define STDOUT_FD 1
+#define DEFAULT_PATH "/bin:/"
+#define O_RDONLY 0x000
+#define O_WRONLY 0x001
+#define O_CREAT 0x200
+#define O_TRUNC 0x400
+#define SEEK_END 2
 
 static char input_buf[LINE_SIZE];
+static char token_buf[TOKEN_BUF_SIZE];
 static char cwd_path[LINE_SIZE] = "/";
+static char path_value[PATH_SIZE] = DEFAULT_PATH;
+static char status_arg[16] = "0";
+static int last_status = 0;
 
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
 {
@@ -42,6 +55,37 @@ static int str_cmp(const char *a, const char *b)
     return *(const unsigned char *)a - *(const unsigned char *)b;
 }
 
+static int starts_with(const char *s, const char *prefix)
+{
+    while (*prefix)
+    {
+        if (*s++ != *prefix++)
+            return 0;
+    }
+    return 1;
+}
+
+static int is_space(char c)
+{
+    return c == ' ' || c == '\t';
+}
+
+static int is_operator(char c)
+{
+    return c == '<' || c == '>' || c == '|';
+}
+
+static void copy_str(char *dst, int dst_size, const char *src)
+{
+    int i = 0;
+    while (src[i] && i < dst_size - 1)
+    {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
 static int has_slash(const char *s)
 {
     while (*s)
@@ -65,6 +109,82 @@ static void write_str(const char *s)
 static void write_char(char c)
 {
     syscall(SYS_write, STDOUT_FD, (uint64)&c, 1);
+}
+
+static int is_path_assignment(const char *arg)
+{
+    return starts_with(arg, "PATH=");
+}
+
+static void set_path_value(const char *value)
+{
+    char next[PATH_SIZE];
+    int n = 0;
+
+    for (int i = 0; value[i] && n < PATH_SIZE - 1;)
+    {
+        if (starts_with(&value[i], "$PATH"))
+        {
+            for (int j = 0; path_value[j] && n < PATH_SIZE - 1; j++)
+                next[n++] = path_value[j];
+            i += 5;
+        }
+        else
+        {
+            next[n++] = value[i++];
+        }
+    }
+    next[n] = '\0';
+    copy_str(path_value, PATH_SIZE, next);
+}
+
+static void print_path(void)
+{
+    write_str("PATH=");
+    write_str(path_value);
+    write_char('\n');
+}
+
+static void status_to_str(int status)
+{
+    char digits[12];
+    unsigned int value;
+    int n = 0;
+    int d = 0;
+
+    if (status < 0)
+    {
+        status_arg[n++] = '-';
+        value = (unsigned int)(-status);
+    }
+    else
+    {
+        value = (unsigned int)status;
+    }
+
+    do
+    {
+        digits[d++] = '0' + value % 10;
+        value /= 10;
+    } while (value && d < (int)sizeof(digits));
+
+    while (d > 0 && n < (int)sizeof(status_arg) - 1)
+        status_arg[n++] = digits[--d];
+    status_arg[n] = '\0';
+}
+
+static void expand_args(int argc, char **argv)
+{
+    for (int i = 0; i < argc; i++)
+    {
+        if (str_cmp(argv[i], "$PATH") == 0)
+            argv[i] = path_value;
+        else if (str_cmp(argv[i], "$?") == 0)
+        {
+            status_to_str(last_status);
+            argv[i] = status_arg;
+        }
+    }
 }
 
 static void move_left(int count)
@@ -96,22 +216,29 @@ static void clear_args(char **argv)
 static int parse_args(char *line, char **argv)
 {
     int argc = 0;
-    int in_token = 0;
+    int out = 0;
 
     clear_args(argv);
-    for (int i = 0; line[i]; i++)
+    for (int i = 0; line[i] && argc < MAX_ARGS - 1 && out < TOKEN_BUF_SIZE - 1;)
     {
-        if (line[i] == ' ' || line[i] == '\t')
+        while (is_space(line[i]))
+            i++;
+        if (!line[i])
+            break;
+
+        argv[argc++] = &token_buf[out];
+        if (is_operator(line[i]))
         {
-            line[i] = '\0';
-            in_token = 0;
+            token_buf[out++] = line[i++];
+            if (token_buf[out - 1] == '>' && line[i] == '>' && out < TOKEN_BUF_SIZE - 1)
+                token_buf[out++] = line[i++];
         }
-        else if (!in_token)
+        else
         {
-            if (argc < MAX_ARGS - 1)
-                argv[argc++] = &line[i];
-            in_token = 1;
+            while (line[i] && !is_space(line[i]) && !is_operator(line[i]) && out < TOKEN_BUF_SIZE - 1)
+                token_buf[out++] = line[i++];
         }
+        token_buf[out++] = '\0';
     }
     argv[argc] = 0;
     return argc;
@@ -252,8 +379,42 @@ static void update_cwd_display(const char *target)
     cwd_path[len] = '\0';
 }
 
-static int run_builtin(int argc, char **argv)
+static int run_builtin(int argc, char **argv, int *status)
 {
+    *status = 0;
+
+    if (is_path_assignment(argv[0]))
+    {
+        if (argc == 1)
+            set_path_value(argv[0] + 5);
+        else
+        {
+            write_str("PATH: use PATH=value\n");
+            *status = 1;
+        }
+        return 1;
+    }
+
+    if (str_cmp(argv[0], "export") == 0)
+    {
+        if (argc == 1)
+            print_path();
+        else if (argc == 2 && is_path_assignment(argv[1]))
+            set_path_value(argv[1] + 5);
+        else
+        {
+            write_str("export: only PATH is supported\n");
+            *status = 1;
+        }
+        return 1;
+    }
+
+    if (str_cmp(argv[0], "PATH") == 0)
+    {
+        print_path();
+        return 1;
+    }
+
     if (str_cmp(argv[0], "cd") == 0)
     {
         if (argc >= 2)
@@ -261,7 +422,10 @@ static int run_builtin(int argc, char **argv)
             if ((int)syscall(SYS_chdir, (uint64)argv[1], 0, 0) == 0)
                 update_cwd_display(argv[1]);
             else
+            {
                 write_str("cd: cannot cd\n");
+                *status = 1;
+            }
         }
         return 1;
     }
@@ -276,36 +440,56 @@ static int run_builtin(int argc, char **argv)
     return 0;
 }
 
-static int join_path(char *dst, const char *prefix, const char *name)
+static int build_path(char *dst, int dst_size, const char *dir, int dir_len, const char *name)
 {
     int n = 0;
-    for (int i = 0; prefix[i] && n < LINE_SIZE - 1; i++)
-        dst[n++] = prefix[i];
-    for (int i = 0; name[i] && n < LINE_SIZE - 1; i++)
+
+    if (dir_len == 0 || (dir_len == 1 && dir[0] == '.'))
+    {
+        for (int i = 0; name[i] && n < dst_size - 1; i++)
+            dst[n++] = name[i];
+        dst[n] = '\0';
+        return name[0] == '\0' || n < dst_size - 1;
+    }
+
+    for (int i = 0; i < dir_len && n < dst_size - 1; i++)
+        dst[n++] = dir[i];
+    if (n > 0 && dst[n - 1] != '/' && n < dst_size - 1)
+        dst[n++] = '/';
+    for (int i = 0; name[i] && n < dst_size - 1; i++)
         dst[n++] = name[i];
     dst[n] = '\0';
-    return n < LINE_SIZE - 1;
+    return n < dst_size - 1;
+}
+
+static void exec_from_path(char **argv)
+{
+    char path[LINE_SIZE];
+    int start = 0;
+
+    for (int i = 0;; i++)
+    {
+        if (path_value[i] == ':' || path_value[i] == '\0')
+        {
+            int len = i - start;
+            if (build_path(path, sizeof(path), &path_value[start], len, argv[0]))
+                syscall(SYS_exec, (uint64)path, (uint64)argv, 0);
+            if (path_value[i] == '\0')
+                break;
+            start = i + 1;
+        }
+    }
 }
 
 static void exec_command(char **argv)
 {
-    static const char *paths[] = {"/bin/", "/usr/bin/", "/", 0};
-    char path[LINE_SIZE];
-
     if (argv[0] == 0)
         syscall(SYS_exit, -1, 0, 0);
 
     if (has_slash(argv[0]))
         syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
     else
-    {
-        syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
-        for (int i = 0; paths[i]; i++)
-        {
-            if (join_path(path, paths[i], argv[0]))
-                syscall(SYS_exec, (uint64)path, (uint64)argv, 0);
-        }
-    }
+        exec_from_path(argv);
 
     write_str("Command not found!\n");
     syscall(SYS_exit, -1, 0, 0);
@@ -321,102 +505,257 @@ static int find_token(char **argv, const char *token)
     return -1;
 }
 
-static void wait_for_child(void)
+static int is_redirect_token(const char *arg)
 {
-    int status;
-    syscall(SYS_wait, (uint64)&status, 0, 0);
+    return str_cmp(arg, "<") == 0 || str_cmp(arg, ">") == 0 || str_cmp(arg, ">>") == 0;
 }
 
-static void redirect_stdout_if_needed(char **argv)
+static int is_control_token(const char *arg)
 {
-    int redirect = find_token(argv, ">");
-    if (redirect < 0)
-        return;
+    return is_redirect_token(arg) || str_cmp(arg, "|") == 0;
+}
 
-    if (argv[redirect + 1] == 0)
+static void print_redirection_syntax_error(const char *token)
+{
+    write_str("syntax error: expected file after ");
+    write_str(token);
+    write_char('\n');
+}
+
+static int wait_for_child(int *status)
+{
+    int child_status = -1;
+    int pid = syscall(SYS_wait, (uint64)&child_status, 0, 0);
+    if (status)
+        *status = child_status;
+    return pid;
+}
+
+static void remove_arg_pair(char **argv, int at)
+{
+    int i = at;
+    while (argv[i + 2])
     {
-        write_str("syntax error: expected file after >\n");
-        syscall(SYS_exit, -1, 0, 0);
+        argv[i] = argv[i + 2];
+        i++;
     }
-
-    syscall(SYS_close, STDOUT_FD, 0, 0);
-    if ((int)syscall(SYS_open, (uint64)argv[redirect + 1], 0x201, 0) < 0)
-        syscall(SYS_exit, -1, 0, 0);
-    argv[redirect] = 0;
+    argv[i] = 0;
+    argv[i + 1] = 0;
 }
 
-static void run_simple(char **argv)
+static int redirect_fd(int target_fd, const char *path, int flags, int append)
 {
+    int fd;
+
+    syscall(SYS_close, target_fd, 0, 0);
+    fd = syscall(SYS_open, (uint64)path, flags, 0);
+    if (fd < 0)
+        return -1;
+    if (append && (int)syscall(SYS_lseek, target_fd, 0, SEEK_END) < 0)
+        return -1;
+    return 0;
+}
+
+static int validate_redirections(char **argv)
+{
+    for (int i = 0; argv[i]; i++)
+    {
+        if (!is_redirect_token(argv[i]))
+            continue;
+        if (argv[i + 1] == 0 || is_control_token(argv[i + 1]))
+        {
+            print_redirection_syntax_error(argv[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int apply_redirections(char **argv)
+{
+    for (int i = 0; argv[i];)
+    {
+        int input = str_cmp(argv[i], "<") == 0;
+        int output = str_cmp(argv[i], ">") == 0;
+        int append = str_cmp(argv[i], ">>") == 0;
+
+        if (!input && !output && !append)
+        {
+            i++;
+            continue;
+        }
+
+        if (argv[i + 1] == 0)
+        {
+            print_redirection_syntax_error(argv[i]);
+            return -1;
+        }
+
+        if (input && redirect_fd(STDIN_FD, argv[i + 1], O_RDONLY, 0) < 0)
+            return -1;
+        if (output && redirect_fd(STDOUT_FD, argv[i + 1], O_WRONLY | O_CREAT | O_TRUNC, 0) < 0)
+            return -1;
+        if (append && redirect_fd(STDOUT_FD, argv[i + 1], O_WRONLY | O_CREAT, 1) < 0)
+            return -1;
+        remove_arg_pair(argv, i);
+    }
+    return 0;
+}
+
+static int run_simple(char **argv)
+{
+    int status = -1;
     int pid = syscall(SYS_fork, 0, 0, 0);
     if (pid < 0)
     {
         write_str("Fork failed!\n");
-        return;
+        return -1;
     }
     if (pid == 0)
     {
-        redirect_stdout_if_needed(argv);
+        if (apply_redirections(argv) < 0)
+            syscall(SYS_exit, -1, 0, 0);
         exec_command(argv);
     }
-    wait_for_child();
+    wait_for_child(&status);
+    return status;
 }
 
-static void run_pipeline(char **argv, int pipe_at)
+static int split_pipeline(char **argv, char ***stages)
 {
-    int fds[2];
-    char **right_argv = &argv[pipe_at + 1];
+    int count = 1;
 
-    argv[pipe_at] = 0;
-    if (argv[0] == 0 || right_argv[0] == 0)
+    stages[0] = argv;
+    if (argv[0] == 0)
+        return 0;
+
+    for (int i = 0; argv[i]; i++)
     {
-        write_str("syntax error: invalid pipe\n");
-        return;
+        if (str_cmp(argv[i], "|") != 0)
+            continue;
+
+        if (i == 0 || argv[i + 1] == 0 || count >= MAX_STAGES)
+        {
+            write_str("syntax error: invalid pipe\n");
+            return -1;
+        }
+        argv[i] = 0;
+        stages[count++] = &argv[i + 1];
+    }
+    return count;
+}
+
+static int run_pipeline(char ***stages, int stage_count)
+{
+    int prev_read = -1;
+    int child_count = 0;
+    int last_pid = -1;
+    int last_pipe_status = -1;
+
+    for (int i = 0; i < stage_count; i++)
+    {
+        int fds[2] = {-1, -1};
+        int pid;
+
+        if (i + 1 < stage_count && syscall(SYS_pipe, (uint64)fds, 0, 0) < 0)
+        {
+            write_str("Pipe creation failed!\n");
+            return -1;
+        }
+
+        pid = syscall(SYS_fork, 0, 0, 0);
+        if (pid < 0)
+        {
+            write_str("Fork failed!\n");
+            if (fds[0] >= 0)
+                syscall(SYS_close, fds[0], 0, 0);
+            if (fds[1] >= 0)
+                syscall(SYS_close, fds[1], 0, 0);
+            return -1;
+        }
+
+        if (pid == 0)
+        {
+            if (prev_read >= 0)
+            {
+                syscall(SYS_close, STDIN_FD, 0, 0);
+                syscall(SYS_dup, prev_read, 0, 0);
+            }
+            if (i + 1 < stage_count)
+            {
+                syscall(SYS_close, STDOUT_FD, 0, 0);
+                syscall(SYS_dup, fds[1], 0, 0);
+            }
+            if (prev_read >= 0)
+                syscall(SYS_close, prev_read, 0, 0);
+            if (fds[0] >= 0)
+                syscall(SYS_close, fds[0], 0, 0);
+            if (fds[1] >= 0)
+                syscall(SYS_close, fds[1], 0, 0);
+            if (apply_redirections(stages[i]) < 0)
+                syscall(SYS_exit, -1, 0, 0);
+            exec_command(stages[i]);
+        }
+
+        child_count++;
+        last_pid = pid;
+        if (prev_read >= 0)
+            syscall(SYS_close, prev_read, 0, 0);
+        if (fds[1] >= 0)
+            syscall(SYS_close, fds[1], 0, 0);
+        prev_read = fds[0];
     }
 
-    if (syscall(SYS_pipe, (uint64)fds, 0, 0) < 0)
-    {
-        write_str("Pipe creation failed!\n");
-        return;
-    }
+    if (prev_read >= 0)
+        syscall(SYS_close, prev_read, 0, 0);
 
-    int left_pid = syscall(SYS_fork, 0, 0, 0);
-    if (left_pid == 0)
+    for (int i = 0; i < child_count; i++)
     {
-        syscall(SYS_close, STDOUT_FD, 0, 0);
-        syscall(SYS_dup, fds[1], 0, 0);
-        syscall(SYS_close, fds[0], 0, 0);
-        syscall(SYS_close, fds[1], 0, 0);
-        exec_command(argv);
+        int status;
+        int pid = wait_for_child(&status);
+        if (pid == last_pid)
+            last_pipe_status = status;
     }
-
-    int right_pid = syscall(SYS_fork, 0, 0, 0);
-    if (right_pid == 0)
-    {
-        syscall(SYS_close, STDIN_FD, 0, 0);
-        syscall(SYS_dup, fds[0], 0, 0);
-        syscall(SYS_close, fds[1], 0, 0);
-        syscall(SYS_close, fds[0], 0, 0);
-        exec_command(right_argv);
-    }
-
-    syscall(SYS_close, fds[0], 0, 0);
-    syscall(SYS_close, fds[1], 0, 0);
-    wait_for_child();
-    wait_for_child();
+    return last_pipe_status;
 }
 
 static void dispatch_command(int argc, char **argv)
 {
-    int pipe_at;
+    char **stages[MAX_STAGES];
+    int stage_count;
+    int builtin_status;
 
-    if (argc == 0 || run_builtin(argc, argv))
+    if (argc == 0)
         return;
 
-    pipe_at = find_token(argv, "|");
-    if (pipe_at >= 0)
-        run_pipeline(argv, pipe_at);
+    if (find_token(argv, "|") < 0 && find_token(argv, "<") < 0 &&
+        find_token(argv, ">") < 0 && find_token(argv, ">>") < 0 &&
+        run_builtin(argc, argv, &builtin_status))
+    {
+        last_status = builtin_status;
+        return;
+    }
+
+    stage_count = split_pipeline(argv, stages);
+    if (stage_count < 0)
+    {
+        last_status = 1;
+        return;
+    }
+
+    for (int i = 0; i < stage_count; i++)
+    {
+        if (validate_redirections(stages[i]) < 0)
+        {
+            last_status = 1;
+            return;
+        }
+    }
+
+    if (stage_count == 1)
+        last_status = run_simple(stages[0]);
     else
-        run_simple(argv);
+        last_status = run_pipeline(stages, stage_count);
 }
 
 void main(void)
@@ -432,6 +771,7 @@ void main(void)
             continue;
 
         argc = parse_args(input_buf, argv);
+        expand_args(argc, argv);
         dispatch_command(argc, argv);
     }
 }

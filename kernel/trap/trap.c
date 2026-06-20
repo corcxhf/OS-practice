@@ -24,6 +24,14 @@ extern void uservec();
 extern void consoleintr(int);
 extern void userret(uint64, uint64);
 extern void virtio_disk_intr();
+
+static void usertrap_finish(void)
+{
+  struct proc *p = myproc();
+  if (p && p->killed)
+    proc_exit(-1);
+  usertrapret();
+}
 /* ================================================================
  * trapinithart — 设置 S-Mode 陷阱向量
  *
@@ -149,13 +157,13 @@ void usertrap(void)
     intr_on();
 
     syscall();
-    usertrapret();
+    usertrap_finish();
   }
   else if (cause == 0x8000000000000001L)
   {
     w_sip(r_sip() & ~2);
     yield();
-    usertrapret();
+    usertrap_finish();
   }
   else if (cause == 0x8000000000000009L)
   {
@@ -177,7 +185,7 @@ void usertrap(void)
 
     if (irq != 0)
       *(uint32 *)PLIC_SCLAIM(hartid) = irq;
-    usertrapret();
+    usertrap_finish();
   }
   else
   {

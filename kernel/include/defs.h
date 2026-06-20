@@ -102,6 +102,8 @@ uint64 sys_fork(void);
 uint64 sys_wait(void);
 uint64 sys_sbrk(void);
 uint64 sys_write(void);
+uint64 sys_ioctl(void);
+void proc_exit(int status);
 
 /* ======================================================
  * Lab7 新增：块缓冲层

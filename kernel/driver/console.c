@@ -7,6 +7,9 @@
 #define CONS_BUF_SIZE 1024
 extern void uart_putc(char c);
 extern struct proc *myproc(void);
+extern struct proc proc[NPROC];
+extern void acquire(struct spinlock *);
+extern void release(struct spinlock *);
 static char digits[] = "0123456789abcdef";
 
 static void consputc(int c) { uart_putc((char)c); }
@@ -153,6 +156,9 @@ void console_print_char(int c)
   {
   case '\r':
     consputc('\r');
+    break;
+  case '\n':
+    consputc('\r');
     consputc('\n');
     break;
   case 0x7f:
@@ -169,18 +175,20 @@ void consoleintr(int c)
 {
   if (c == 3)
   {
-    struct proc *p = myproc();
-    // 如果当前触发中断的是用户进程（PID > 1，不要误杀你的 Shell 或者是 initcode！）
-    if (p && p->pid > 1)
+    for (struct proc *p = proc; p < &proc[NPROC]; p++)
     {
-      p->killed = 1; // 🎯 标记追杀！
-
-      // 极其关键：万一这个进程现在正在 pipe 或者 console 里面睡觉呢？
-      // 必须立刻把它叫醒，让它感知到自己死期已到，否则它会一直睡死在内核里！
-      extern void wakeup(void *);
-      wakeup(p); // 或者是你内核通用的唤醒通道
-      return;    // 绝不准把 Ctrl+C 的字符塞进缓冲区，直接返回！
+      acquire(&p->lock);
+      if (p->pid > 1 && p->status != TASK_FREE && p->status != TASK_ZOMBIE)
+      {
+        p->killed = 1;
+        if (p->status == TASK_SLEEPING)
+          p->status = TASK_READY;
+      }
+      release(&p->lock);
     }
+    extern void wakeup(void *);
+    wakeup(&cons_buffer);
+    return;
   }
 
   if (c == '\r')
@@ -203,14 +211,27 @@ int consgetc(void)
 {
   while (cons_head == cons_tail)
   {
+    struct proc *p = myproc();
+    if (p && p->killed)
+      return -1;
     // 如果你的内核有实现让出CPU的 yield()，可以在这里调用
     // 从而防止当前的死循环把 CPU 彻底卡死
     extern void yield(void);
     yield();
   }
 
+  if (myproc() && myproc()->killed)
+    return -1;
+
   // 从缓冲区拿出一个字符并返回
   int c = cons_buffer[cons_head];
   cons_head = (cons_head + 1) % CONS_BUF_SIZE;
   return c;
+}
+
+int console_pending(void)
+{
+  if (cons_tail >= cons_head)
+    return cons_tail - cons_head;
+  return CONS_BUF_SIZE - cons_head + cons_tail;
 }
