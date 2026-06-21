@@ -119,6 +119,7 @@ UPROGS = \
     $U/tail \
     $U/hexdump \
     $U/runtests \
+    $U/build \
     $U/sbrktest 
 #     $U/testpipe \
 

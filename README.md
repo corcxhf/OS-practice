@@ -137,6 +137,7 @@ int main(void) {
 - `/bin/tail`
 - `/bin/hexdump`
 - `/bin/runtests`
+- `/bin/build`
 - `/bin/sbrktest`
 - `/bin/vi`
 - `/bin/tcc`
@@ -401,4 +402,16 @@ runtests wc
 
 `runtests` 不带参数等同于 `runtests all`。也可以运行 `runtests tools`、`runtests contracts`，或指定单项测试名，例如 `runtests wc`。`runtests list` 会列出当前所有测试名，`runtests help` 会输出用法。
 
-下一步可以整理 `runtests` 的内部结构，让工具测试和 contract 测试更容易继续扩展；或者开始做一个很小的 build tool。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。
+第一版构建工具是 `/bin/build`。它负责把已知目标编译出来，当前支持：
+
+```sh
+build list
+build help
+build libc-contract
+build fs-contract
+build contracts
+```
+
+`runtests contracts` 会通过 `build` 编译 contract，再运行并判定结果。这样 `build` 负责构建，`runtests` 负责测试判定。
+
+下一步可以把 `build` 从固定目标推进到读取一个简单 build 描述文件；或者继续整理 `runtests` 的内部结构，让工具测试和 contract 测试更容易扩展。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。

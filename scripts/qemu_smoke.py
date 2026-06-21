@@ -536,6 +536,29 @@ def test_hexdump_tool(q):
     require(out, "\n1\n", "hexdump usage exit status")
 
 
+def test_build_tool(q):
+    cleanup(q, "rt_libc", "rt_fs", "build.log", "ct_trunc", "ct_stdio", "ct_seek")
+
+    out = q.command("build list", timeout=5)
+    require(out, "contracts:", "build list contracts group")
+    require(out, "libc-contract", "build list libc target")
+    require(out, "fs-contract", "build list fs target")
+
+    out = q.command("build help", timeout=5)
+    require(out, "usage: build", "build help usage")
+
+    out = q.command("build libc-contract", timeout=30)
+    require(out, "BUILD_PASS libc-contract", "build libc contract pass")
+    out = q.command("./rt_libc", timeout=10)
+    require(out, "LIBC_CONTRACT_PASS", "built libc contract runs")
+
+    q.command("build missing")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "build unknown target exit status")
+
+    cleanup(q, "rt_libc", "build.log", "ct_trunc", "ct_stdio", "ct_seek")
+
+
 def test_runtests_tool(q):
     cleanup(q, "rt_a", "rt_b", "rt_c", "rt_lines", "rt_mvsrc", "rt_mvdst", "rt_out")
 
@@ -752,6 +775,7 @@ def main():
         ("cmp", test_cmp_tool),
         ("head-tail", test_head_tail_tools),
         ("hexdump", test_hexdump_tool),
+        ("build", test_build_tool),
         ("runtests", test_runtests_tool),
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),

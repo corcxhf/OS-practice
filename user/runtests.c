@@ -214,6 +214,7 @@ static void cleanup_files(void)
     unlink_file("rt_out");
     unlink_file("rt_libc");
     unlink_file("rt_fs");
+    unlink_file("build.log");
     unlink_file("ct_trunc");
     unlink_file("ct_stdio");
     unlink_file("ct_seek");
@@ -330,9 +331,15 @@ static int test_mv(void)
 
 static int compile_contract(const char *source, const char *output)
 {
-    char *argv[] = {"/bin/tcc", (char *)source, "-o", (char *)output, 0};
+    const char *target;
+    char *argv[] = {"/bin/build", 0, 0};
 
-    unlink_file(output);
+    (void)source;
+    if (str_eq(output, "rt_libc"))
+        target = "libc-contract";
+    else
+        target = "fs-contract";
+    argv[1] = (char *)target;
     return expect_status(argv, "rt_out", 0);
 }
 
