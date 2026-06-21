@@ -111,6 +111,14 @@ UPROGS = \
     $U/clear \
     $U/rm \
     $U/grep \
+    $U/wc \
+    $U/cp \
+    $U/mv \
+    $U/cmp \
+    $U/head \
+    $U/tail \
+    $U/hexdump \
+    $U/runtests \
     $U/sbrktest 
 #     $U/testpipe \
 

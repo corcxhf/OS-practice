@@ -333,6 +333,254 @@ def test_grep_tool(q):
     require(out, "\n-1\n", "grep missing-file exit status")
 
 
+def test_wc_tool(q):
+    cleanup(q, "wc1.txt", "wc2.txt", "empty.txt")
+
+    q.command("echo alpha beta > wc1.txt")
+    q.command("echo gamma >> wc1.txt")
+    q.command("echo z > wc2.txt")
+    q.command("touch empty.txt")
+
+    out = q.command("wc wc1.txt")
+    require(out, "2 3 17 wc1.txt", "wc single file counts")
+
+    out = q.command("cat wc1.txt | wc")
+    require(out, "2 3 17", "wc stdin pipeline counts")
+
+    out = q.command("wc empty.txt")
+    require(out, "0 0 0 empty.txt", "wc empty file counts")
+
+    out = q.command("wc wc1.txt wc2.txt")
+    require(out, "2 3 17 wc1.txt", "wc multi-file first counts")
+    require(out, "1 1 2 wc2.txt", "wc multi-file second counts")
+    require(out, "3 4 19 total", "wc multi-file total counts")
+
+    q.command("wc missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "wc missing-file exit status")
+
+
+def test_cp_tool(q):
+    cleanup(q, "cp_src.txt", "cp_dst.txt", "cp_short.txt")
+
+    q.command("echo alpha beta > cp_src.txt")
+    q.command("echo gamma >> cp_src.txt")
+    out = q.command("cp cp_src.txt cp_dst.txt")
+    forbid(out, "cp:", "cp successful copy has no error")
+    out = q.command("cat cp_dst.txt")
+    require(out, "alpha beta", "cp copied first line")
+    require(out, "gamma", "cp copied appended line")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "cp success exit status")
+
+    q.command("echo very-long-stale-tail > cp_dst.txt")
+    q.command("echo z > cp_short.txt")
+    q.command("cp cp_short.txt cp_dst.txt")
+    out = q.command("cat cp_dst.txt")
+    require(out, "\nz\n", "cp overwrote destination")
+    forbid(out, "very-long-stale-tail", "cp truncates destination")
+
+    q.command("cp missing.txt cp_dst.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "cp missing-source exit status")
+
+    q.command("cp cp_src.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "cp usage exit status")
+
+
+def test_mv_tool(q):
+    cleanup(q, "mv_src.txt", "mv_dst.txt", "mv_same.txt", "mv_old.txt", "mv_short.txt")
+
+    q.command("echo alpha beta > mv_src.txt")
+    q.command("echo gamma >> mv_src.txt")
+    out = q.command("mv mv_src.txt mv_dst.txt")
+    forbid(out, "mv:", "mv successful move has no error")
+    out = q.command("cat mv_dst.txt")
+    require(out, "alpha beta", "mv copied first line")
+    require(out, "gamma", "mv copied appended line")
+    out = q.command("cat mv_src.txt")
+    require(out, "cat: cannot open mv_src.txt", "mv removed source")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "mv success exit status")
+
+    q.command("echo very-long-stale-tail > mv_dst.txt")
+    q.command("echo z > mv_short.txt")
+    q.command("mv mv_short.txt mv_dst.txt")
+    out = q.command("cat mv_dst.txt")
+    require(out, "\nz\n", "mv overwrote destination")
+    forbid(out, "very-long-stale-tail", "mv truncates destination")
+    out = q.command("cat mv_short.txt")
+    require(out, "cat: cannot open mv_short.txt", "mv removed overwritten source")
+
+    q.command("echo keep > mv_same.txt")
+    q.command("mv mv_same.txt mv_same.txt")
+    out = q.command("cat mv_same.txt")
+    require(out, "keep", "mv same-file preserves content")
+
+    q.command("mv missing.txt mv_dst.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "mv missing-source exit status")
+
+    q.command("mv mv_dst.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "mv usage exit status")
+
+
+def test_cmp_tool(q):
+    cleanup(q, "cmp_a.txt", "cmp_b.txt", "cmp_c.txt", "cmp_d.txt")
+
+    q.command("echo alpha > cmp_a.txt")
+    q.command("echo alpha > cmp_b.txt")
+    out = q.command("cmp cmp_a.txt cmp_b.txt")
+    forbid(out, "differ", "cmp identical files are quiet")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "cmp identical exit status")
+
+    q.command("echo alXha > cmp_c.txt")
+    out = q.command("cmp cmp_a.txt cmp_c.txt")
+    require(out, "cmp_a.txt cmp_c.txt differ: byte 3", "cmp differing byte output")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "cmp differing exit status")
+
+    q.command("echo alphabet > cmp_d.txt")
+    out = q.command("cmp cmp_a.txt cmp_d.txt")
+    require(out, "cmp_a.txt cmp_d.txt differ: byte 6", "cmp differing length output")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "cmp differing length exit status")
+
+    q.command("cmp cmp_a.txt missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "cmp missing-file exit status")
+
+    q.command("cmp cmp_a.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "cmp usage exit status")
+
+
+def test_head_tail_tools(q):
+    cleanup(q, "hd.txt", "tl.txt")
+
+    q.command("echo h1 > hd.txt")
+    for i in range(2, 13):
+        q.command(f"echo h{i} >> hd.txt")
+    q.command("cp hd.txt tl.txt")
+
+    out = q.command("head -n 3 hd.txt")
+    require(out, "h1", "head -n first line")
+    require(out, "h2", "head -n second line")
+    require(out, "h3", "head -n third line")
+    forbid(out, "h4", "head -n stops after requested lines")
+
+    out = q.command("head hd.txt")
+    require(out, "h10", "head default tenth line")
+    forbid(out, "h11", "head default stops at ten lines")
+
+    out = q.command("cat hd.txt | head -n 2")
+    require(out, "h1", "head stdin first line")
+    require(out, "h2", "head stdin second line")
+    forbid(out, "h3", "head stdin stops after requested lines")
+
+    q.command("head missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "head missing-file exit status")
+
+    q.command("head -n bad hd.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "head bad-count exit status")
+
+    out = q.command("tail -n 3 tl.txt")
+    require(out, "h10", "tail -n first retained line")
+    require(out, "h11", "tail -n second retained line")
+    require(out, "h12", "tail -n third retained line")
+    forbid(out, "h9", "tail -n keeps only requested lines")
+
+    out = q.command("tail tl.txt")
+    require(out, "h3", "tail default first retained line")
+    require(out, "h12", "tail default last line")
+    forbid(out, "h2", "tail default keeps ten lines")
+
+    out = q.command("cat tl.txt | tail -n 2")
+    require(out, "h11", "tail stdin first retained line")
+    require(out, "h12", "tail stdin second retained line")
+    forbid(out, "h10", "tail stdin keeps only requested lines")
+
+    q.command("tail missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "tail missing-file exit status")
+
+    q.command("tail -n bad tl.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "tail bad-count exit status")
+
+
+def test_hexdump_tool(q):
+    cleanup(q, "hex.txt")
+
+    q.command("echo hi > hex.txt")
+    out = q.command("hexdump hex.txt")
+    require(out, "00000000", "hexdump file offset")
+    require(out, "68 69 0a", "hexdump file bytes")
+    require(out, "|hi.|", "hexdump file ascii")
+
+    out = q.command("echo AZ | hexdump")
+    require(out, "41 5a 0a", "hexdump stdin bytes")
+    require(out, "|AZ.|", "hexdump stdin ascii")
+
+    q.command("hexdump missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "hexdump missing-file exit status")
+
+    q.command("hexdump hex.txt extra")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "hexdump usage exit status")
+
+
+def test_runtests_tool(q):
+    cleanup(q, "rt_a", "rt_b", "rt_c", "rt_lines", "rt_mvsrc", "rt_mvdst", "rt_out")
+
+    out = q.command("runtests list", timeout=5)
+    require(out, "tools:", "runtests list tools group")
+    require(out, "  wc", "runtests list wc")
+    require(out, "contracts:", "runtests list contracts group")
+    require(out, "  fs-contract", "runtests list fs contract")
+
+    out = q.command("runtests help", timeout=5)
+    require(out, "usage: runtests", "runtests help usage")
+    require(out, "runtests list", "runtests help mentions list")
+
+    out = q.command("runtests", timeout=60)
+    require(out, "PASS cp-cmp", "runtests cp/cmp pass")
+    require(out, "PASS cmp-diff", "runtests cmp-diff pass")
+    require(out, "PASS wc", "runtests wc pass")
+    require(out, "PASS head", "runtests head pass")
+    require(out, "PASS tail", "runtests tail pass")
+    require(out, "PASS hexdump", "runtests hexdump pass")
+    require(out, "PASS mv", "runtests mv pass")
+    require(out, "PASS libc-contract", "runtests libc contract pass")
+    require(out, "PASS fs-contract", "runtests fs contract pass")
+    require(out, "SUMMARY 9 passed 0 failed", "runtests summary")
+    require(out, "RUNTESTS_PASS", "runtests pass marker")
+
+    out = q.command("echo $?")
+    require(out, "\n0\n", "runtests exit status")
+
+    out = q.command("runtests tools", timeout=20)
+    require(out, "PASS cp-cmp", "runtests tools cp/cmp pass")
+    require(out, "PASS mv", "runtests tools mv pass")
+    require(out, "SUMMARY 7 passed 0 failed", "runtests tools summary")
+    forbid(out, "libc-contract", "runtests tools skips contracts")
+
+    out = q.command("runtests wc", timeout=10)
+    require(out, "PASS wc", "runtests single wc pass")
+    require(out, "SUMMARY 1 passed 0 failed", "runtests single summary")
+    forbid(out, "PASS head", "runtests single skips other tests")
+
+    q.command("runtests missing")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "runtests unknown selector exit status")
+
+
 def test_vi_save_and_keys(q):
     cleanup(q, "save.txt", "esc.txt", "keys.txt", "bs.txt")
     q.vi("save.txt", b"ilong-long-long-line\nanother-long-line\n\x1b:wq\r", timeout=8)
@@ -498,6 +746,13 @@ def main():
     tests = [
         ("shell", test_shell),
         ("grep", test_grep_tool),
+        ("wc", test_wc_tool),
+        ("cp", test_cp_tool),
+        ("mv", test_mv_tool),
+        ("cmp", test_cmp_tool),
+        ("head-tail", test_head_tail_tools),
+        ("hexdump", test_hexdump_tool),
+        ("runtests", test_runtests_tool),
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),
         ("libc-contract", test_libc_contract),

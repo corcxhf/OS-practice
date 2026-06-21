@@ -1,0 +1,117 @@
+#include "proc.h"
+#include "types.h"
+
+#define STDOUT_FD 1
+#define STDERR_FD 2
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_CREAT 0x200
+#define O_TRUNC 0x400
+#define COPY_CAP 512
+
+static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
+{
+    register uint64 a0_asm __asm__("a0") = a0;
+    register uint64 a1_asm __asm__("a1") = a1;
+    register uint64 a2_asm __asm__("a2") = a2;
+    register uint64 a7_asm __asm__("a7") = n;
+    __asm__ volatile("ecall"
+                     : "+r"(a0_asm)
+                     : "r"(a1_asm), "r"(a2_asm), "r"(a7_asm)
+                     : "memory");
+    return a0_asm;
+}
+
+static int str_len(const char *s)
+{
+    int len = 0;
+    while (s[len])
+        len++;
+    return len;
+}
+
+static void write_str(int fd, const char *s)
+{
+    syscall(SYS_write, fd, (uint64)s, (uint64)str_len(s));
+}
+
+static int close_status(int fd)
+{
+    return (int)syscall(SYS_close, fd, 0, 0);
+}
+
+static int copy_file(const char *src, const char *dst)
+{
+    char buf[COPY_CAP];
+    int in_fd;
+    int out_fd;
+    int n;
+
+    in_fd = (int)syscall(SYS_open, (uint64)src, O_RDONLY, 0);
+    if (in_fd < 0)
+    {
+        write_str(STDERR_FD, "cp: cannot open ");
+        write_str(STDERR_FD, src);
+        write_str(STDERR_FD, "\n");
+        return -1;
+    }
+
+    out_fd = (int)syscall(SYS_open, (uint64)dst, O_WRONLY | O_CREAT | O_TRUNC, 0);
+    if (out_fd < 0)
+    {
+        write_str(STDERR_FD, "cp: cannot create ");
+        write_str(STDERR_FD, dst);
+        write_str(STDERR_FD, "\n");
+        close_status(in_fd);
+        return -1;
+    }
+
+    while ((n = (int)syscall(SYS_read, in_fd, (uint64)buf, sizeof(buf))) > 0)
+    {
+        int written = 0;
+        while (written < n)
+        {
+            int m = (int)syscall(SYS_write, out_fd, (uint64)(buf + written), n - written);
+            if (m <= 0)
+            {
+                write_str(STDERR_FD, "cp: write error ");
+                write_str(STDERR_FD, dst);
+                write_str(STDERR_FD, "\n");
+                close_status(in_fd);
+                close_status(out_fd);
+                return -1;
+            }
+            written += m;
+        }
+    }
+
+    if (n < 0)
+    {
+        write_str(STDERR_FD, "cp: read error ");
+        write_str(STDERR_FD, src);
+        write_str(STDERR_FD, "\n");
+        close_status(in_fd);
+        close_status(out_fd);
+        return -1;
+    }
+
+    if (close_status(in_fd) < 0 || close_status(out_fd) < 0)
+        return -1;
+    return 0;
+}
+
+void main(int argc, char *argv[])
+{
+    if (argc != 3)
+    {
+        write_str(STDERR_FD, "usage: cp SRC DST\n");
+        syscall(SYS_exit, 1, 0, 0);
+    }
+
+    syscall(SYS_exit, copy_file(argv[1], argv[2]) < 0 ? -1 : 0, 0, 0);
+}
+
+void __attribute__((naked, section(".text.entry"))) _start(void)
+{
+    __asm__ volatile("call main");
+}

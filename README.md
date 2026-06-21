@@ -129,6 +129,14 @@ int main(void) {
 - `/bin/clear`
 - `/bin/rm`
 - `/bin/grep`
+- `/bin/wc`
+- `/bin/cp`
+- `/bin/mv`
+- `/bin/cmp`
+- `/bin/head`
+- `/bin/tail`
+- `/bin/hexdump`
+- `/bin/runtests`
 - `/bin/sbrktest`
 - `/bin/vi`
 - `/bin/tcc`
@@ -325,4 +333,72 @@ grep PATTERN FILE...
 cat file | grep PATTERN
 ```
 
-下一步可以继续做 `wc`，然后是 `cp` 和 `mv`。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。
+第二块工具箱砖是 `/bin/wc`。它支持：
+
+```sh
+wc FILE...
+cat file | wc
+```
+
+第三块工具箱砖是 `/bin/cp`。它支持：
+
+```sh
+cp SRC DST
+```
+
+第四块工具箱砖是 `/bin/mv`。它支持：
+
+```sh
+mv SRC DST
+```
+
+第五块工具箱砖是 `/bin/cmp`。它支持：
+
+```sh
+cmp FILE1 FILE2
+```
+
+第六块工具箱砖是 `/bin/head` 和 `/bin/tail`。它们支持：
+
+```sh
+head [-n N] [FILE]
+tail [-n N] [FILE]
+cat file | head -n 5
+cat file | tail -n 5
+```
+
+第七块工具箱砖是 `/bin/hexdump`。它支持：
+
+```sh
+hexdump [FILE]
+cat file | hexdump
+```
+
+第一版 MyOS 内部 test runner 是 `/bin/runtests`。它会在系统内创建临时文件，运行一组轻量工具测试，收集退出状态和输出文件，并汇总：
+
+```sh
+runtests
+runtests tools
+runtests contracts
+runtests list
+runtests help
+runtests wc
+```
+
+当前覆盖：
+
+- `cp` + `cmp`
+- `cmp` 不同文件
+- `wc`
+- `head`
+- `tail`
+- `hexdump`
+- `mv`
+- 编译并运行 `/src/tests/libc_ct.c`
+- 编译并运行 `/src/tests/fs_ct.c`
+
+`tty_ct.c` 仍由宿主机 QEMU smoke script 驱动，因为它需要交互输入、Ctrl-C 和终端模式检查。
+
+`runtests` 不带参数等同于 `runtests all`。也可以运行 `runtests tools`、`runtests contracts`，或指定单项测试名，例如 `runtests wc`。`runtests list` 会列出当前所有测试名，`runtests help` 会输出用法。
+
+下一步可以整理 `runtests` 的内部结构，让工具测试和 contract 测试更容易继续扩展；或者开始做一个很小的 build tool。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。
