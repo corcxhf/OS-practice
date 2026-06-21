@@ -110,8 +110,12 @@ UPROGS = \
     $U/mkdir \
     $U/clear \
     $U/rm \
+    $U/grep \
     $U/sbrktest 
 #     $U/testpipe \
+
+$U/%: $U/%.c
+	$(CC) $(CFLAGS) $< -o $@
 
 $U/%.o: $U/%.c
 	$(CC) $(CFLAGS) -c $< -o $@

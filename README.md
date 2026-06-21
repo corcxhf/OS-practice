@@ -1,202 +1,328 @@
-# Lab 8 操作系统初代 Shell 功能说明书
+# MyOS
 
-## 1. 运行环境与预设
-* **权限级别：** 系统初始进程（最高特权，无用户隔离）。
-* **依赖子系统：**
-  * 键盘（支持标准输入输出）。
-  * 基础文件系统（支持目录项遍历、块读写）。
-* **执行模式：** 单进程 REPL（读取-求值-输出）死循环，纯内建命令（无 `fork/exec`）。
+MyOS 是一个小型 RISC-V 类 Unix 操作系统。它起点是教学内核，但现在的目标已经升级为一个可以逐步自举的开发环境。
 
-## 2. 核心架构设计
+目标不是：
 
-### 2.1 状态管理
-维护全局字符数组记录当前路径，用于命令解析和提示符渲染。
-`char cwd[MAX_PATH] = "/";`
-
-### 2.2 提示符 (Prompt)
-每次循环开始时，打印包含 `cwd` 的提示符。
-*示例：* `MyOS:/usr/bin> `
-
-### 2.3 命令路由表
-采用结构体数组进行命令分发。
-```c
-struct command {
-    const char *name;
-    int (*func)(int argc, char **argv);
-};
-```
-
-## 3. 指令集列表 (Built-ins)
-
-### 3.1 终端交互类
-| 指令 | 参数格式 | 功能描述 | 底层实现要点 |
-| :--- | :--- | :--- | :--- |
-| `help` | 无 | 打印系统支持的命令列表 | 遍历路由表并格式化输出。 |
-| `echo` | `[字符串...]` | 回显输入的字符串 | 遍历 `argv[1]` 至末尾，追加换行符。 |
-| `clear`| 无 | 清空终端屏幕 | 覆写缓冲区，重置光标坐标至 `(0,0)`。 |
-
-### 3.2 目录导航类
-| 指令 | 参数格式 | 功能描述 | 底层实现要点 |
-| :--- | :--- | :--- | :--- |
-| `pwd`  | 无 | 打印当前工作目录 | 打印全局 `cwd` 变量。 |
-| `cd`   | `[路径]` | 切换工作目录 | 解析路径并调用 FS 接口验证属性，成功则更新 `cwd`。需处理 `.` 和 `..`。 |
-| `ls`   | `[路径/可选]` | 列出目录内容 | 调用 FS 接口遍历目标目录表，格式化输出文件名。 |
-
-### 3.3 文件操作类
-| 指令 | 参数格式 | 功能描述 | 底层实现要点 |
-| :--- | :--- | :--- | :--- |
-| `cat`  | `[文件路径]` | 打印文件内容 | `open()` -> 分配 Buffer -> 循环 `read()` 并打屏 -> `close()`。 |
-| `touch`| `[文件路径]` | 创建空文件 | 校验重名后，调用 FS 分配新 INode 并在目录中注册。 |
-| `mkdir`| `[目录路径]` | 创建新目录 | 创建目录节点，并初始化 `.` 和 `..` 默认条目。 |
-
-### 3.4 系统控制类
-| 指令 | 参数格式 | 功能描述 | 底层实现要点 |
-| :--- | :--- | :--- | :--- |
-| `reboot`| 无 | 重启系统 | 发送 8042 键盘控制器复位命令或 ACPI 重启信号。 |
-
-## 4. 开发优先级规划
-1. **Phase 1 (输入基建)：** 跑通 `while(1)` 读取循环，正确处理退格键，实现 `echo` 和 `clear`。
-2. **Phase 2 (环境集成)：** 引入全局变量 `cwd`，实现 `pwd` 和 `cd`。
-3. **Phase 3 (读盘验证)：** 对接文件系统读取 syscall，实现 `ls` 和 `cat`。
-4. **Phase 4 (写盘验证)：** 对接文件系统写入 syscall，实现 `touch` 和 `mkdir`。
-
-
-
-
-# MyOS 多页表隔离与多进程独立宇宙重构技术报告
-
-本报告归纳了在实现用户态与内核态页表完全隔离（独立页表架构）的过程中，为了使第一个初始进程（`proczero` / Shell）能够成功运行，并完美支持 `fork`、`exec`、`wait`、`exit` 以及工业级控制台交互，所进行的核心排查与重构工作。
-
----
-
-## 🛠️ 第一战：解耦虚实两界，盘活初始进程与 `fork`
-
-### 1.1 案发现场与法医指纹
-系统启动进入 Shell 前，或者子进程（PID = 2）诞生落地的一瞬间，系统直接触发内核崩溃：
 ```text
-PID = [2] 触发 Instruction Page Fault (cause = 12)
-出事地址 (sepc) : 0x87fb3034 | 失败地址 (stval): 0x87fb3034
+MyOS 能运行程序。
 ```
 
-### 1.2 根因分析
-1. **历史病灶（内核恒等映射依赖）**：初始进程 `userinit()` 在扁平页表时代，直接将 `kalloc()` 分配的内核高端物理地址（如 `0x87fb3000`）赋给了 `p->trapframe->epc`，并做了恒等映射。
-2. **子进程页表虚无**：当父进程调用 `sys_fork()` 时，`p->sz` 为 0，导致内存克隆函数 `uvmcopy` 未执行。子进程继承了父进程高端的 `epc = 0x87fb3034`，但在子进程的独立页表宇宙里，该地址有效位 `PTE_V == 0`。MMU 查表失败，直接人道毁灭。
+而是：
 
-### 1.3 科学重构方案
-彻底贯彻**“用户态眼睛只能看到低位虚拟地址”**的解耦原则，将首个进程的代码和栈强行安排在虚拟地址起点：
-
-* **`userinit()` 拨乱反正**：
-    * 将 `initcode` 机器码物理页映射到用户虚拟地址 `0x0` 处（配置 `PTE_U | PTE_X | PTE_R | PTE_W`）。
-    * 将用户栈物理页映射到虚拟地址 `0x1000` 处。
-    * 锁死进程入口：`p->trapframe->epc = 0;`，栈顶：`p->trapframe->sp = 0x2000;`。
-    * 明确指定水位线：`p->sz = 0x2000;`。
-* **`uvmcopy()` 建立防火墙**：
-    * 在内存拷贝循环中，加入对 `trapframe` 和 `userret` 专属页面的边界保护，严禁普通拷贝盲目覆盖或强拆多页表工厂初始化的生命通道。
-
----
-
-## 🔬 第二战：攻克内核态盲区，修复 `sys_read` 崩溃
-
-### 2.1 案发现场与法医指纹
-当输入第一个键盘字符企图唤醒 Shell 时，内核突然被自己“毒死”：
 ```text
-scause = 15 (Store Page Fault), sepc = 0x80004ecc (sysfile.c:174), stval = 508 (0x1f4)
+MyOS 能锻造下一代 MyOS。
 ```
 
-### 2.2 根因分析
-1.  **内核全局页表的视野盲区**：Shell 调用 `read(0, buf, 1)`，传入的缓冲区虚拟地址 `buf` 处于低位区（如 `508`）。
-2.  此时系统虽通过 `SSTATUS_SUM` 开启了内核访问用户态内存的权限，但在独立页表架构下，当前硬件 `satp` 指向的是内核全局页表 `kernel_pagetable`。
-3.  内核页表的第 0 个顶级槽位（`kernel_pagetable[0]`）彻底空虚（等于 0）。当内核代码执行 `p[i] = (char)c;` 直接解引用用户传来的低位指针时，MMU 在内核态查表直接死机。
+完整长期路线见 [OUROBOROS.md](OUROBOROS.md)。
 
-### 2.3 科学重构方案
-废除依靠 `SUM` 直接在内核态解引用用户指针的危险行为，改用**正统页表自查换算法（`copyout` 流派）**：
+## 当前状态
+
+MyOS 目前处在 **Spark -> Workbench** 之间：
+
+- 内核可以在 QEMU RISC-V `virt` 机器上启动。
+- 用户程序可以通过 `fork`、`exec`、`wait`、`exit` 运行。
+- shell 支持 PATH 查找、行编辑、重定向、多级管道和 `$?`。
+- 文件系统支持基础文件、目录、截断、删除、`stat` 和目录项复用，并有测试覆盖。
+- `/bin/vi` 是当前主编辑器。
+- MyOS 内置 `tcc`，可以在系统内编译简单 C 程序。
+- 镜像里带有一套很小的 libc 和运行时对象。
+- `make test-qemu` 可以自动启动 QEMU 跑回归测试。
+
+它还不是完整 POSIX 系统。现在更准确地说，它是一个正在长大的实验性 OS，并且我们在逐步把每个关键行为变成可测试契约。
+
+## 快速开始
+
+宿主机通常需要这些工具：
+
+- `make`
+- `gcc`
+- `python3`
+- `qemu-system-riscv64`
+- `riscv64-unknown-elf-gcc`、`ld`、`objcopy`、`objdump`
+- `riscv64-linux-gnu-gcc`、`ar`
+
+构建内核和文件系统镜像：
+
+```sh
+make kernel.elf fs.img
+```
+
+运行 MyOS：
+
+```sh
+make run
+```
+
+退出 QEMU：
+
+```text
+Ctrl-a x
+```
+
+运行自动回归测试：
+
+```sh
+make test-qemu
+```
+
+如果开发时 `fs.img` 变旧或损坏，可以重新生成：
+
+```sh
+rm -f fs.img
+make fs.img
+```
+
+## 在 MyOS 里能做什么
+
+基础 shell 工作流：
+
+```sh
+ls
+ls /bin
+pwd
+cd /src
+cd /
+```
+
+文件 IO 和命令组合：
+
+```sh
+echo hello > msg.txt
+echo world >> msg.txt
+cat < msg.txt
+echo ok | cat | cat
+echo $?
+```
+
+编辑、编译、运行 C 程序：
+
+```sh
+vi hello.c
+tcc hello.c -o hello
+./hello
+echo $?
+```
+
+示例 `hello.c`：
 
 ```c
-// 在 sys_read 的控制台拦截分支中（fd == 0）
-uint64 va_page = PGROUNDDOWN(user_addr);
-uint64 offset = user_addr - va_page;
+#include <stdio.h>
 
-// 拿着用户进程自己的私有独立页表人工查表
-pte_t *pte = walk(myproc()->pagetable, va_page, 0);
-if(pte && (*pte & PTE_V)) {
-    uint64 pa = PTE2PA(*pte);
-    char *kernel_ptr = (char *)(pa + offset);
-    *kernel_ptr = (char)c; // 安全写入内核能看懂的高端/物理地址
+int main(void) {
+    int x;
+    scanf("%d", &x);
+    printf("x=%d\n", x);
+    return 0;
 }
 ```
 
----
+## 文件系统镜像内容
 
-## 💣 第三战：平息老表回收风暴，护航 `sys_exec` 连环调用
+生成的 `fs.img` 当前会打包：
 
-### 3.1 案发现场与法医指纹
-第一次 `echo 1` 成功打印并退出，但紧接着输入第二次 `echo 2` 时，内核疯狂 Panic：
+- `/bin/echo`
+- `/bin/ls`
+- `/bin/cat`
+- `/bin/touch`
+- `/bin/mkdir`
+- `/bin/clear`
+- `/bin/rm`
+- `/bin/grep`
+- `/bin/sbrktest`
+- `/bin/vi`
+- `/bin/tcc`
+- `/lib/crt1.o`、`/lib/crti.o`、`/lib/crtn.o`、`/lib/libc.a`
+- `/include/...` MyOS 最小头文件集合
+- `/src/tests/libc_ct.c`
+- `/src/tests/fs_ct.c`
+- `/src/tests/tty_ct.c`
+
+`/bin/edit` 和 `/bin/kilo` 已经从镜像里移除。现在编辑器入口统一是 `/bin/vi`。
+
+注意一个文件系统限制：单个路径组件长度受 `DIRSIZ = 14` 限制，所以镜像里的测试文件名使用 `libc_ct.c` 这种短名。
+
+## Shell 契约
+
+shell 源码在 [user/initcode.c](user/initcode.c)。它目前是第一个用户进程，也是主要交互环境。
+
+当前支持：
+
+- 通过 `/bin:/` 做 PATH 查找。
+- 内建命令：`cd`、`pwd`、`PATH`、`export PATH=...`。
+- Backspace 和左右方向键行编辑。
+- 输出重定向：`>`。
+- 追加重定向：`>>`。
+- 输入重定向：`<`。
+- 多级管道：`a | b | c`。
+- 上一条命令状态：`$?`。
+- Ctrl-C 可以终止前台用户程序，并保持 shell 存活。
+
+当前退出状态约定：
+
+- `0`：成功。
+- `1`：普通命令失败或语法错误。
+- `-1`：系统级失败、命令不存在、重定向打开失败或 Ctrl-C 终止。
+
+这不是完整 POSIX shell 行为，而是当前 MyOS 明确承诺的 shell contract。
+
+## 编辑器和 TTY
+
+`vi` 是 neatvi 的移植版本，构建后放在 `/bin/vi`。
+
+重要终端行为：
+
+- `vi` 运行时会切换到 raw/no-echo 模式。
+- `vi` 使用终端 alternate screen buffer，所以退出后不会把 `~`、`:wq` 等编辑器残影留在 shell 屏幕上。
+- `tcgetattr` 和 `tcsetattr` 已经实现到足够支撑当前编辑器和测试。
+- echo 行为目前仍有一部分在 libc 层模拟，还不是完整的内核 TTY line discipline。
+
+这部分已经可用，但后续仍值得继续下沉到更系统的 kernel TTY 层。
+
+## 工具链
+
+镜像里包含移植后的 `tcc` 和最小运行时：
+
 ```text
-[Exec Trace 4] 准备回收老页表 -> !!! KERNEL PANIC !!! Reason: freewalk: leaf
-或者第二次 fork 时触发：scause = 13 (Load Page Fault), stval = 8000000000087fff
+/bin/tcc
+/lib/crt1.o
+/lib/crti.o
+/lib/crtn.o
+/lib/libc.a
+/include
 ```
 
-### 3.2 根因分析
-1.  **钉子户残留引发爆破失败**：旧 Shell 进程在被 `exec` 卸载并调用 `freewalk()` 销毁旧页表时，页表树中依然残留了用户低位资产以及高端内核生命通道（`userret` / `trapframe`）的有效叶子项（`PTE_V == 1`），触发 `freewalk` 的安全熔断机制。
-2.  **特赦令缺失导致双重释放**：为了强拆老表，后续引入的粗暴清场机制误将**当前常驻父进程（Shell）赖以生存的 `trapframe` 物理页**也给 `kfree` 释放回了内存池。在第二次 `echo 2` 调用 `allocproc` 时，这块物理地皮被新进程踩踏污染，导致父进程现场沦为垃圾值，引发内核态读页错误。
-
-### 3.3 科学重构方案
-在 `proc_freepagetable` 爆破老表时，实施 **“全量推土机流派”**，并在物理释放时颁布 **“核心特赦令”**：
-
-```c
-// 深度遍历三级页表项
-uint64 pa = PTE2PA(pte3);
-if ((pte3 & PTE_U) || (pa >= 0x87000000)) {
-    // 特赦令：1. 严禁释放内核核心代码段； 2. 严禁释放当前保命用的 trapframe 物理页！
-    if ((pa < 0x80000000 || pa >= 0x80100000) && (pa != PGROUNDDOWN((uint64)myproc()->trapframe))) {
-        kfree((void*)pa); // 只有安全的纯粹私有资产才允许回收
-    }
-}
-pgtbl3[k] = 0; // 强制抹黑门牌号，斩断红线，确保 freewalk 顺畅通过
-```
-
----
-
-## 🎨 第四战：御敌于门外，手造工业级 Shell 行编辑器
-
-### 4.1 案发现场与历史死结
-* **逆天退格**：光标可以无限向前涂抹，连同提示符 `MyOS:/>` 和历史陈迹一同摧毁。如果强行在内核倒车物理指针，极易引发无符号回绕，导致一秒钟循环上万次的“鬼畜叫醒服务”，满屏疯狂弹错。
-* **越界方向键**：按下 ↑↓←→ 方向键时，终端仿真器的 ANSI 转义序列（如 `\033[C`）穿透硬件，导致光标在屏幕上随处横跳、任意插拔字符，同时污染输入缓冲区。
-
-### 4.2 根因分析
-* **硬件连环回显污染**：内核键盘中断处理函数 `consoleintr()` 过于狂热，在收到字符的第一微秒就无脑执行了 `consputc(c)`。这导致方向键和退格控制符在 Shell 还没来得及拦截前，就提前控制了物理屏幕，导致“虚实两界完全错位”（屏幕光标动了，Shell 账本没动）。
-
-### 4.3 终极重构方案（大权上交，Shell 主宰）
-1.  **彻底阉割内核回显权**：将 `consoleintr()` 中的所有 `consputc` 全部剥离！内核化身纯粹、冰冷的字符搬运工，只负责把原始字节塞进环形队列并唤醒上层。
-2.  **全权交由 Shell 渲染**：在 `user/initcode.c` 中建立一整套**“支持游标指针（Cursor）的动态编辑缓冲宇宙”**。引入 `buf_idx`（整行总长度）与 `cursor`（光标当前绝对位置）双标尺。
-
-#### 核心行编辑器逻辑实现：
-* **捕获方向键序列 (`27, '[', 'A/B/C/D'`)**：
-    * `'A' / 'B'` (上下键)：原地静默丢弃（暂不实现历史命令）。
-    * `'D'` (左键)：限制 `if (cursor > 0)`，允许账本 `cursor--` 并向控制台发 `\033[D` 左移。撞到提示符边界自动免疫。
-    * `'C'` (右键)：限制 `if (cursor < buf_idx)`，允许账本 `cursor++` 并向控制台发 `\033[C` 右移。
-* **高级定点删除（字符向前递进）**：
-    按下退格时，限制 `if (cursor > 0)`。利用循环将 `cursor` 后方的字符全部在 `buf` 中**向前平移一格**。同时向控制台发送 `左移 -> 重新打印后续字符 -> 补空格擦屁股 -> 批量左移拉回物理光标` 的 ANSI 动态渲染序列。
-* **高级定点插入（字符向后平移）**：
-    输入普通字符时，利用循环将 `cursor` 后方的字符在 `buf` 中**向后倒车腾出座位**。塞入新字符后，一气呵成将新字符及后方所有字符通过 `SYS_write` 渲染至屏幕，随后利用循环发送 `\033[D` 精准将物理光标拽回插入点的下一格。
-
----
-
-## 🏆 最终重构成果演示
-
-经历四轮史诗级重构后，系统彻底兼顾了**多页表绝对隔离的安全性**与**工业级终端操作的健壮性**：
+近期工具链目标是让 MyOS 内部能顺畅完成：
 
 ```text
-MyOS:/> echo 1
-1
-Process [2] exited with code [0]
-MyOS:/> echo 2
-2
-Process [3] exited with code [0]
-MyOS:/> ehco hello                     # 故意输错命令
-exec failed!
-Process [4] exited with code [-1]      # 优雅容错，绝不引发内核 Panic
-MyOS:/> ecXho 1                        # 支持在输入内容中移动光标、定点插入
-MyOS:/> echo 1                         # 支持定点删除，后续字符自动前后挤压、完美递进
+写 C -> 编译 C -> 运行程序 -> 查看结果 -> 继续修改
 ```
-整个操作系统的内存管理与进程子系统至此完成历史性闭环，完美通关！
+
+长期目标是让更多用户态工具在 MyOS 内部被编译出来。
+
+## 回归测试
+
+主要测试入口：
+
+```sh
+make test-qemu
+```
+
+它会运行 [scripts/qemu_smoke.py](scripts/qemu_smoke.py)，启动 QEMU，复制一份临时 `fs.img`，驱动 shell，并检查系统行为。
+
+当前覆盖：
+
+- Shell：
+  - `/bin` 内容
+  - `>`、`>>`、`<`
+  - 多级管道
+  - `$?`
+  - 语法错误
+  - 重定向失败行为
+  - Ctrl-C 后 shell 存活和退出状态
+- `vi`：
+  - 保存和退出
+  - 保存短文件时正确截断旧内容
+  - ESC 模式切换
+  - 方向键
+  - Backspace
+  - alternate screen 退出行为
+- `tcc`：
+  - 在 MyOS 内编译 C 程序
+  - 运行使用 `scanf` 的程序
+  - 检查输入回显和输出结果
+- libc contract：
+  - `snprintf`、`sscanf`
+  - `open(O_TRUNC)`
+  - `fopen`、`fread`、`fwrite`
+  - `lseek`
+  - `malloc`、`realloc`、`free`
+- 文件系统 contract：
+  - 创建、读取、写入
+  - `stat`、`fstat`
+  - 截断
+  - 删除后重建
+  - 目录项复用
+  - 独立 fd offset
+- TTY contract：
+  - 默认 `ECHO`、`ICANON`、`ISIG`
+  - 关闭和恢复 echo
+  - Ctrl-C 打断阻塞输入
+  - `vi` 退出后恢复主屏幕且不清屏
+
+修 bug 时，应该同步添加或更新 QEMU 回归测试。
+
+## 仓库结构
+
+```text
+kernel/              内核代码：boot、trap、VM、proc、FS、driver、syscall
+user/                用户程序和 init shell
+ports/tinycc/        TCC 移植、MyOS libc、运行时对象、头文件
+ports/neatvi/        vi 编辑器移植
+tests/               会被打进 MyOS 并在系统内编译运行的 contract 测试
+scripts/             宿主侧自动化脚本，包括 QEMU smoke test
+mkfs.c               宿主侧 fs.img 构建工具
+Makefile             构建、运行、测试入口
+OUROBOROS.md         长期自举路线图
+```
+
+## 常用命令
+
+构建运行所需文件：
+
+```sh
+make kernel.elf fs.img
+```
+
+运行：
+
+```sh
+make run
+```
+
+测试：
+
+```sh
+make test-qemu
+```
+
+清理生成文件：
+
+```sh
+make clean
+```
+
+只重建文件系统镜像：
+
+```sh
+rm -f fs.img
+make fs.img
+```
+
+## 已知限制
+
+- 没有 job control 和进程组。
+- Ctrl-C 当前采用实用近似：杀掉非 shell 用户进程。
+- shell 还没有引号、glob、通用变量和脚本。
+- `termios` 仍是最小实现。
+- 文件系统容量小，路径组件名短。
+- MyOS 内部还没有 `make`。
+- MyOS 还不能在自己内部重建完整 userland 或 kernel。
+
+## 下一步方向
+
+当前下一阶段是 **Toolsmith**：
+
+- 添加小型 Unix 工具，例如 `wc`、`cp`、`mv`。
+- 只在真实工具需要时继续补 libc。
+- 每增加一个工具，都配 contract test。
+- 为 MyOS 内部的小型构建工具做准备。
+
+当前已经完成第一块工具箱砖：`/bin/grep`。它支持：
+
+```sh
+grep PATTERN FILE...
+cat file | grep PATTERN
+```
+
+下一步可以继续做 `wc`，然后是 `cp` 和 `mv`。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。

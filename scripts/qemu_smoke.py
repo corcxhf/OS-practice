@@ -222,6 +222,7 @@ def test_shell(q):
     )
     out = q.command("ls /bin")
     require(out, "vi", "vi editor in /bin")
+    require(out, "grep", "grep tool in /bin")
     forbid(out, "edit", "removed edit alias in /bin")
     forbid(out, "kilo", "removed kilo editor in /bin")
 
@@ -298,6 +299,38 @@ def test_shell(q):
     require(out, PROMPT, "prompt after Ctrl-C")
     out = q.command("echo $?")
     require(out, "\n-1\n", "Ctrl-C exit status")
+
+
+def test_grep_tool(q):
+    cleanup(q, "g1.txt", "g2.txt")
+
+    q.command("echo alpha > g1.txt")
+    q.command("echo beta >> g1.txt")
+    q.command("echo gamma >> g1.txt")
+    q.command("echo beta-two > g2.txt")
+
+    out = q.command("grep beta g1.txt")
+    require(out, "beta", "grep file match")
+    forbid(out, "alpha", "grep excludes nonmatching line")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "grep match exit status")
+
+    out = q.command("cat g1.txt | grep gamma")
+    require(out, "gamma", "grep stdin pipeline match")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "grep pipeline match exit status")
+
+    out = q.command("grep beta g1.txt g2.txt")
+    require(out, "g1.txt:beta", "grep multi-file first prefix")
+    require(out, "g2.txt:beta-two", "grep multi-file second prefix")
+
+    q.command("grep absent g1.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "grep no-match exit status")
+
+    q.command("grep beta missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "grep missing-file exit status")
 
 
 def test_vi_save_and_keys(q):
@@ -464,6 +497,7 @@ def main():
     q = None
     tests = [
         ("shell", test_shell),
+        ("grep", test_grep_tool),
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),
         ("libc-contract", test_libc_contract),
