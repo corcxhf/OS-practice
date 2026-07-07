@@ -28,8 +28,11 @@
 #define SYS_dup 23
 #define SYS_unlink 24
 #define SYS_lseek 25
+#define SYS_ftruncate 26
 #define SYS_ioctl 27
 #define SYS_rename 28
+#define SYS_getcwd 29
+#define SYS_dup2 30
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -158,6 +161,7 @@ struct proc
 
   struct file *ofile[NOFILE];
   struct inode *cwd;
+  char cwd_path[MAXPATH];
 };
 
 /* CPU 描述结构 */

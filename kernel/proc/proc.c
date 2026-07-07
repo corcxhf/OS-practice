@@ -25,6 +25,7 @@ extern void release(struct spinlock *lk);
 extern int holding(struct spinlock *lk);
 extern pagetable_t proc_pagetable(struct proc *p);
 extern void *memmove(void *dest, const void *src, unsigned long n);
+extern char *safestrcpy(char *s, const char *t, int n);
 extern uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
 extern uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz);
 // static uint8 proczero_code[] = {
@@ -301,6 +302,7 @@ void userinit()
   p->ofile[2] = f2;
 
   p->cwd = namei("/");
+  safestrcpy(p->cwd_path, "/", sizeof(p->cwd_path));
   p->name = "proczero";
   p->status = TASK_READY;
   release(&p->lock);

@@ -2,6 +2,7 @@
 
 typedef unsigned long size_t;
 typedef long ssize_t;
+typedef unsigned int mode_t;
 typedef unsigned long uint64;
 typedef unsigned int uint;
 
@@ -17,8 +18,11 @@ typedef unsigned int uint;
 #define SYS_fstat 19
 #define SYS_unlink 24
 #define SYS_lseek 25
+#define SYS_ftruncate 26
 #define SYS_ioctl 27
 #define SYS_rename 28
+#define SYS_getcwd 29
+#define SYS_dup2 30
 #define SYS_fork 1
 #define SYS_wait 3
 #define SYS_exec 13
@@ -32,6 +36,7 @@ typedef unsigned int uint;
 #define O_TRUNC 0x400
 #define O_EXCL 0x800
 #define O_APPEND 0x1000
+#define AT_FDCWD -100
 #define R_OK 4
 
 #define SEEK_SET 0
@@ -163,9 +168,23 @@ long lseek(int fd, long offset, int whence)
 
 int ftruncate(int fd, long length)
 {
-    (void)fd;
-    (void)length;
-    return 0;
+    int ret = (int)syscall(SYS_ftruncate, (uint64)fd, (uint64)length, 0);
+    if (ret < 0)
+        errno_value = 22;
+    return ret;
+}
+
+int truncate(const char *path, long length)
+{
+    int fd;
+    int ret;
+
+    fd = open(path, O_RDWR);
+    if (fd < 0)
+        return -1;
+    ret = ftruncate(fd, length);
+    close(fd);
+    return ret;
 }
 
 int unlink(const char *pathname)
@@ -217,9 +236,48 @@ int access(const char *path, int mode)
     return 0;
 }
 
+int mkdir(const char *path, mode_t mode)
+{
+    (void)mode;
+    return (int)syscall(20, (uint64)path, 0, 0);
+}
+
+int chdir(const char *path)
+{
+    return (int)syscall(21, (uint64)path, 0, 0);
+}
+
+char *getcwd(char *buf, size_t size)
+{
+    uint64 ret;
+
+    if (buf == NULL || size == 0)
+    {
+        errno_value = 22;
+        return NULL;
+    }
+    ret = syscall(SYS_getcwd, (uint64)buf, (uint64)size, 0);
+    if (ret == 0)
+    {
+        errno_value = 22;
+        return NULL;
+    }
+    return buf;
+}
+
 int dup(int oldfd)
 {
     return (int)syscall(SYS_dup, (uint64)oldfd, 0, 0);
+}
+
+int dup2(int oldfd, int newfd)
+{
+    return (int)syscall(SYS_dup2, (uint64)oldfd, (uint64)newfd, 0);
+}
+
+int getpid(void)
+{
+    return (int)syscall(11, 0, 0, 0);
 }
 
 int fork(void)
@@ -249,6 +307,37 @@ int kill(int pid, int sig)
 int execvp(const char *file, char *const argv[])
 {
     return (int)syscall(SYS_exec, (uint64)file, (uint64)argv, 0);
+}
+
+int execv(const char *path, char *const argv[])
+{
+    return execvp(path, argv);
+}
+
+int execve(const char *path, char *const argv[], char *const envp[])
+{
+    (void)envp;
+    return execvp(path, argv);
+}
+
+int openat(int dirfd, const char *pathname, int flags, ...)
+{
+    (void)dirfd;
+    return open(pathname, flags);
+}
+
+int faccessat(int dirfd, const char *pathname, int mode, int flags)
+{
+    (void)dirfd;
+    (void)flags;
+    return access(pathname, mode);
+}
+
+int fstatat(int dirfd, const char *pathname, struct stat *st, int flags)
+{
+    (void)dirfd;
+    (void)flags;
+    return stat(pathname, st);
 }
 
 int fcntl(int fd, int cmd, ...)
@@ -1214,7 +1303,9 @@ int atexit(void (*function)(void))
 
 int isatty(int fd)
 {
-    return fd >= 0 && fd <= 2;
+    if (fd >= 0 && fd <= 2)
+        return 1;
+    return 0;
 }
 
 void (*signal(int signum, void (*handler)(int)))(int)

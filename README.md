@@ -293,6 +293,8 @@ build/riscv64-myos-gcc tests/libc_contract.c -o build/gcc-libc-contract
 
 为 native GCC 做准备的 libc/FS 缺口会逐项进入 contract。当前已经补入 `rename(old, new)`，覆盖普通文件重命名、覆盖已有文件和跨目录重命名；这对应编译器常见的“先写临时文件，再 rename 成最终输出”的模式。
 
+当前 GCC static contract 也开始覆盖更基础的宿主环境语义：`ftruncate`、`dup2`、`mkdir`、`chdir`、`getcwd`，以及 libc 层的 `openat` / `fstatat` / `faccessat` 兼容入口。它们还不是完整 POSIX 实现，但已经把编译器和构建工具常见的临时文件、工作目录和重定向路径纳入 QEMU 回归。
+
 ## C++ 适配目标
 
 C++ 当前不作为 native 编译器移植的第一优先级。它的目标是先形成一条稳定、可测试、可逐步扩展的 freestanding C++ 路线，为后续 g++ 回归做准备：

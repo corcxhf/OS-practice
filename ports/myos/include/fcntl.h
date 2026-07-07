@@ -12,12 +12,14 @@
 
 #define F_GETFL 3
 #define F_SETFL 4
+#define AT_FDCWD -100
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 int open(const char *pathname, int flags, ...);
+int openat(int dirfd, const char *pathname, int flags, ...);
 int fcntl(int fd, int cmd, ...);
 
 #ifdef __cplusplus

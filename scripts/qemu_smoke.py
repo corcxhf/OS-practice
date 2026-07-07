@@ -1085,11 +1085,14 @@ def test_gcc_contract(q):
 
 
 def test_gcc_static_contract(q):
-    cleanup(q, "gs_stdio", "gs_raw", "gs_ren", "gs_exec")
+    cleanup(q, "gs_stdio", "gs_raw", "gs_ren", "gs_exec", "gs_dup2")
+    q.command("rm gs_dir", timeout=5)
 
     out = q.command("cat /src/tests/gccst_main.c", timeout=5)
     require(out, "GCC_STATIC_PASS", "gcc static main source in image")
     require(out, "test_pipe_fork_wait", "gcc static main covers pipe/fork/wait")
+    require(out, "test_dup2_redirect", "gcc static main covers dup2 redirect")
+    require(out, "getcwd-dir", "gcc static main covers getcwd/chdir")
     out = q.command("cat /src/tests/gccst_lib.c", timeout=5)
     require(out, "gcc_static_count_words", "gcc static lib source in image")
     out = q.command("cat /src/tests/gccst_lib.h", timeout=5)

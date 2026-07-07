@@ -35,7 +35,7 @@ extern void initlock(struct spinlock *lk, char *name);
 extern void release(struct spinlock *lk);
 extern int holding(struct spinlock *lk);
 
-extern char *safepy(char *s, const char *t, int n);
+extern char *safestrcpy(char *s, const char *t, int n);
 extern int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz);
 extern void wakeup(void *chan);
 extern void forkret();
@@ -49,6 +49,97 @@ extern int strlen(const char *s);
 extern int filestat(struct file *f, uint64 addr);
 extern int pipewrite(struct pipe *pi, uint64 addr, int n);
 extern int growproc(int n);
+
+static int append_path_component(char *dst, int cap, const char *name)
+{
+  int len = strlen(dst);
+  int name_len = strlen(name);
+
+  if (name_len == 0 || (name_len == 1 && name[0] == '.'))
+    return 0;
+
+  if (len == 1 && dst[0] == '/')
+  {
+    if (name_len + 1 >= cap)
+      return -1;
+    safestrcpy(dst + 1, name, cap - 1);
+    return 0;
+  }
+
+  if (len + 1 + name_len >= cap)
+    return -1;
+  dst[len++] = '/';
+  safestrcpy(dst + len, name, cap - len);
+  return 0;
+}
+
+static void pop_path_component(char *path)
+{
+  int len = strlen(path);
+
+  if (len <= 1)
+  {
+    safestrcpy(path, "/", MAXPATH);
+    return;
+  }
+
+  while (len > 1 && path[len - 1] == '/')
+    len--;
+  while (len > 1 && path[len - 1] != '/')
+    len--;
+  if (len <= 1)
+    safestrcpy(path, "/", MAXPATH);
+  else
+    path[len - 1] = 0;
+}
+
+static int normalize_cwd_path(struct proc *p, const char *input, char *out, int cap)
+{
+  char tmp[MAXPATH];
+  const char *s;
+
+  if (cap <= 1)
+    return -1;
+  if (input[0] == '/')
+    safestrcpy(out, "/", cap);
+  else
+    safestrcpy(out, p->cwd_path[0] ? p->cwd_path : "/", cap);
+
+  s = input;
+  while (*s)
+  {
+    char component[DIRSIZ + 1];
+    int len = 0;
+
+    while (*s == '/')
+      s++;
+    if (*s == 0)
+      break;
+
+    while (s[len] && s[len] != '/')
+    {
+      if (len >= DIRSIZ)
+        return -1;
+      component[len] = s[len];
+      len++;
+    }
+    component[len] = 0;
+    s += len;
+
+    if (component[0] == 0 || (component[0] == '.' && component[1] == 0))
+      continue;
+    if (component[0] == '.' && component[1] == '.' && component[2] == 0)
+      pop_path_component(out);
+    else
+    {
+      safestrcpy(tmp, out, sizeof(tmp));
+      if (append_path_component(tmp, sizeof(tmp), component) < 0)
+        return -1;
+      safestrcpy(out, tmp, cap);
+    }
+  }
+  return 0;
+}
 /* ================================================================
  * sys_getpid — 返回当前进程的 PID
  *
@@ -350,6 +441,7 @@ uint64 sys_fork(void)
   np->parent = p;
   if (p->cwd)
     np->cwd = idup(p->cwd);
+  safestrcpy(np->cwd_path, p->cwd_path[0] ? p->cwd_path : "/", sizeof(np->cwd_path));
   // 8. 激活子进程，让调度器可以看得到它
   acquire(&np->lock);
   np->status = TASK_READY;
@@ -724,6 +816,7 @@ uint64 sys_mkdir(void)
 uint64 sys_chdir(void)
 {
   char path[128]; // 或者你的 MAXPATH
+  char next_path[MAXPATH];
   struct inode *ip;
   struct proc *p = myproc();
 
@@ -742,11 +835,35 @@ uint64 sys_chdir(void)
   }
   iunlock(ip); // 检查完毕，解锁（但保留引用计数，因为接下来要把它当 cwd 用）
 
+  if (normalize_cwd_path(p, path, next_path, sizeof(next_path)) < 0)
+  {
+    iput(ip);
+    return -1;
+  }
+
   // 3. 辞旧迎新：释放旧的目录，换上新的目录！
   iput(p->cwd);
   p->cwd = ip;
+  safestrcpy(p->cwd_path, next_path, sizeof(p->cwd_path));
 
   return 0;
+}
+
+uint64 sys_getcwd(void)
+{
+  uint64 addr;
+  int size;
+  struct proc *p = myproc();
+  const char *cwd = p->cwd_path[0] ? p->cwd_path : "/";
+  int len = strlen(cwd) + 1;
+
+  if (argaddr(0, &addr) < 0 || argint(1, &size) < 0)
+    return 0;
+  if (size <= 0 || len > size)
+    return 0;
+  if (copyout(p->pagetable, addr, (char *)cwd, len) < 0)
+    return 0;
+  return addr;
 }
 
 uint64 sys_pipe(void)
@@ -864,6 +981,32 @@ uint64 sys_dup(void)
   filedup(f);
 
   // 5. 返回新分配的槽位编号
+  return newfd;
+}
+
+uint64 sys_dup2(void)
+{
+  struct file *f;
+  int oldfd;
+  int newfd;
+  struct proc *p = myproc();
+
+  if (argint(0, &oldfd) < 0 || argint(1, &newfd) < 0)
+    return -1;
+  if (oldfd < 0 || oldfd >= NOFILE || newfd < 0 || newfd >= NOFILE)
+    return -1;
+  if ((f = p->ofile[oldfd]) == 0)
+    return -1;
+  if (oldfd == newfd)
+    return newfd;
+
+  if (p->ofile[newfd])
+  {
+    fileclose(p->ofile[newfd]);
+    p->ofile[newfd] = 0;
+  }
+  p->ofile[newfd] = f;
+  filedup(f);
   return newfd;
 }
 
@@ -1061,4 +1204,55 @@ uint64 sys_lseek(void)
 
   // 3. 返回修改后的当前绝对偏移量
   return f->off;
+}
+
+uint64 sys_ftruncate(void)
+{
+  struct file *f;
+  int fd;
+  int length;
+  char zeros[128];
+
+  if (argint(0, &fd) < 0 || argint(1, &length) < 0)
+    return -1;
+  if (fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
+    return -1;
+  if (f->type != FD_INODE || !f->writable || length < 0)
+    return -1;
+
+  ilock(f->ip);
+  if (f->ip->type != T_FILE)
+  {
+    iunlock(f->ip);
+    return -1;
+  }
+  if (length == 0)
+  {
+    itrunc(f->ip);
+  }
+  else if (length > (int)f->ip->size)
+  {
+    memset(zeros, 0, sizeof(zeros));
+    while ((int)f->ip->size < length)
+    {
+      int n = length - (int)f->ip->size;
+      uint off = f->ip->size;
+      if (n > (int)sizeof(zeros))
+        n = sizeof(zeros);
+      if (writei(f->ip, 0, (uint64)zeros, off, n) != n)
+      {
+        iunlock(f->ip);
+        return -1;
+      }
+    }
+  }
+  else
+  {
+    f->ip->size = (uint)length;
+    iupdate(f->ip);
+  }
+  if (f->off > (uint)length)
+    f->off = (uint)length;
+  iunlock(f->ip);
+  return 0;
 }

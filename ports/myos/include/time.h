@@ -1,7 +1,7 @@
 #ifndef _TIME_H
 #define _TIME_H
 
-typedef long time_t;
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {

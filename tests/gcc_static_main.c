@@ -98,6 +98,7 @@ static void test_sys_files(void)
 {
     struct stat st;
     char buf[32];
+    char cwd[64];
     int fd;
 
     remove("gs_raw");
@@ -116,16 +117,41 @@ static void test_sys_files(void)
     memset(buf, 0, sizeof(buf));
     expect_int("read-raw", read(fd, buf, 6), 6);
     expect_str("raw-content", buf, "abZZef");
+    expect_int("truncate-mid", ftruncate(fd, 4), 0);
+    expect_int("seek-after-trunc", lseek(fd, 0, SEEK_SET), 0);
+    memset(buf, 0, sizeof(buf));
+    expect_int("read-truncated", read(fd, buf, 6), 4);
+    expect_str("truncated-content", buf, "abZZ");
+    expect_int("truncate-extend", ftruncate(fd, 8), 0);
+    expect_int("seek-after-extend", lseek(fd, 0, SEEK_SET), 0);
+    memset(buf, 0x7f, sizeof(buf));
+    expect_int("read-extended", read(fd, buf, 8), 8);
+    if (memcmp(buf, "abZZ\0\0\0\0", 8) != 0)
+        fail("truncate-extend-zero-fill");
     expect_int("fstat", fstat(fd, &st), 0);
     expect_int("fstat-type", st.st_mode, T_FILE);
-    expect_int("fstat-size", st.st_size, 6);
+    expect_int("fstat-size", st.st_size, 8);
     close(fd);
 
     expect_int("access-existing", access("gs_raw", R_OK), 0);
     expect_int("rename", rename("gs_raw", "gs_ren"), 0);
     expect_int("access-old-missing", access("gs_raw", R_OK), -1);
     expect_int("stat-renamed", stat("gs_ren", &st), 0);
-    expect_int("stat-renamed-size", st.st_size, 6);
+    expect_int("stat-renamed-size", st.st_size, 8);
+    expect_int("fstatat-renamed", fstatat(AT_FDCWD, "gs_ren", &st, 0), 0);
+    expect_int("fstatat-size", st.st_size, 8);
+
+    expect_int("mkdir", mkdir("gs_dir", 0777), 0);
+    expect_int("chdir-dir", chdir("gs_dir"), 0);
+    if (!getcwd(cwd, sizeof(cwd)))
+        fail("getcwd");
+    else
+        expect_str("getcwd-dir", cwd, "/gs_dir");
+    expect_int("chdir-parent", chdir(".."), 0);
+    if (!getcwd(cwd, sizeof(cwd)))
+        fail("getcwd-parent");
+    else
+        expect_str("getcwd-parent", cwd, "/");
 
     errno = 0;
     fd = open("gs_missing", O_RDONLY);
@@ -134,6 +160,7 @@ static void test_sys_files(void)
 
     expect_int("unlink-renamed", unlink("gs_ren"), 0);
     expect_int("access-unlinked", access("gs_ren", R_OK), -1);
+    expect_int("unlink-dir", unlink("gs_dir"), 0);
 }
 
 static void test_open_flags(void)
@@ -211,6 +238,41 @@ static void test_pipe_fork_wait(void)
     expect_int("child-status", status, 7);
 }
 
+static void test_dup2_redirect(void)
+{
+    int saved;
+    int fd;
+    char buf[32];
+
+    remove("gs_dup2");
+    saved = dup(STDOUT_FILENO);
+    if (saved < 0)
+    {
+        fail("dup-save-stdout");
+        return;
+    }
+    fd = open("gs_dup2", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0)
+    {
+        close(saved);
+        fail("dup2-open");
+        return;
+    }
+
+    expect_int("dup2-to-stdout", dup2(fd, STDOUT_FILENO), STDOUT_FILENO);
+    close(fd);
+    expect_int("dup2-write", write(STDOUT_FILENO, "dup2-ok", 7), 7);
+    expect_int("dup2-restore", dup2(saved, STDOUT_FILENO), STDOUT_FILENO);
+    close(saved);
+
+    if (read_file("gs_dup2", buf, sizeof(buf)) < 0)
+    {
+        fail("dup2-read");
+        return;
+    }
+    expect_str("dup2-content", buf, "dup2-ok");
+}
+
 static void test_exec_redirect(void)
 {
     char *child_argv[] = {"/bin/gcc-hello", 0};
@@ -255,6 +317,7 @@ int main(int argc, char **argv)
     test_sys_files();
     test_open_flags();
     test_pipe_fork_wait();
+    test_dup2_redirect();
     test_exec_redirect();
 
     remove("gs_stdio");
@@ -262,6 +325,8 @@ int main(int argc, char **argv)
     remove("gs_ren");
     remove("gs_flags");
     remove("gs_exec");
+    remove("gs_dup2");
+    unlink("gs_dir");
 
     if (failures)
     {
