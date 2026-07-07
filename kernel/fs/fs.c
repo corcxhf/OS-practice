@@ -38,6 +38,7 @@ extern struct buf *bread(uint dev, uint blockno);
 extern void brelse(struct buf *b);
 extern void bwrite(struct buf *b);
 extern uint balloc(uint dev);
+extern void bfree(uint dev, uint b);
 
 extern void *memcpy(void *dst, const void *src, unsigned long n);
 extern void *memmove(void *dest, const void *src, unsigned long n);
@@ -300,11 +301,47 @@ void iunlock(struct inode *ip)
   panic("iunlock");
 }
 
+void itrunc(struct inode *ip)
+{
+  struct buf *bp;
+  uint *a;
+
+  for (int i = 0; i < NDIRECT; i++)
+  {
+    if (ip->addrs[i])
+    {
+      bfree(ip->dev, ip->addrs[i]);
+      ip->addrs[i] = 0;
+    }
+  }
+
+  if (ip->addrs[NDIRECT])
+  {
+    bp = bread(ip->dev, ip->addrs[NDIRECT]);
+    a = (uint *)bp->data;
+    for (int i = 0; i < NINDIRECT; i++)
+    {
+      if (a[i])
+        bfree(ip->dev, a[i]);
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT]);
+    ip->addrs[NDIRECT] = 0;
+  }
+
+  ip->size = 0;
+  iupdate(ip);
+}
+
 void iput(struct inode *ip)
 {
   ip->ref--;
-  // 若引用归零且 nlink==0（文件已被 unlink），应当释放所有数据块
-  // 简化版：先只做 ref 管理，不处理数据块释放
+  if (ip->ref == 0 && ip->valid && ip->nlink == 0)
+  {
+    itrunc(ip);
+    ip->type = 0;
+    iupdate(ip);
+  }
   if (ip->ref == 0)
     ip->valid = 0; // 标记缓存槽空闲，供下次 iget 重用
 }

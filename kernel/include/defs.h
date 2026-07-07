@@ -113,6 +113,7 @@ void binit(void);
 struct buf *bread(uint dev, uint blockno);
 void bwrite(struct buf *b);
 void brelse(struct buf *b);
+void bfree(uint dev, uint b);
 
 /* ======================================================
  * Lab7 新增：文件系统核心
@@ -129,6 +130,7 @@ void ilock(struct inode *ip);
 void iunlock(struct inode *ip);
 void iput(struct inode *ip);
 void iupdate(struct inode *ip);
+void itrunc(struct inode *ip);
 uint bmap(struct inode *ip, uint bn);
 int dirlink(struct inode *dp, char *name, uint inum);
 struct inode *namei(char *path);

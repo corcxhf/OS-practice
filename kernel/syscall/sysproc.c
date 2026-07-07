@@ -927,6 +927,92 @@ bad:
   return -1;
 }
 
+uint64 sys_rename(void)
+{
+  struct inode *old_dp = 0;
+  struct inode *new_dp = 0;
+  struct inode *ip = 0;
+  struct inode *target = 0;
+  struct dirent de;
+  char old_path[MAXPATH], new_path[MAXPATH];
+  char old_name[DIRSIZ], new_name[DIRSIZ];
+  uint old_off;
+  uint target_off;
+
+  if (argstr(0, old_path, MAXPATH) < 0 || argstr(1, new_path, MAXPATH) < 0)
+    return -1;
+
+  if ((old_dp = nameiparent(old_path, old_name)) == 0)
+    return -1;
+  ilock(old_dp);
+
+  if (namecmp(old_name, ".") == 0 || namecmp(old_name, "..") == 0)
+    goto bad_old_dp;
+
+  if ((ip = dirlookup(old_dp, old_name, &old_off)) == 0)
+    goto bad_old_dp;
+  ilock(ip);
+  if (ip->type != T_FILE)
+    goto bad_ip;
+
+  if ((new_dp = nameiparent(new_path, new_name)) == 0)
+    goto bad_ip;
+  ilock(new_dp);
+
+  if (namecmp(new_name, ".") == 0 || namecmp(new_name, "..") == 0)
+    goto bad_new_dp;
+
+  if (old_dp->dev == new_dp->dev && old_dp->inum == new_dp->inum &&
+      namecmp(old_name, new_name) == 0)
+  {
+    iunlockput(new_dp);
+    iunlockput(ip);
+    iunlockput(old_dp);
+    return 0;
+  }
+
+  if ((target = dirlookup(new_dp, new_name, &target_off)) != 0)
+  {
+    ilock(target);
+    if (target->type != T_FILE)
+      goto bad_target;
+
+    memset(&de, 0, sizeof(de));
+    if (writei(new_dp, 0, (uint64)&de, target_off, sizeof(de)) != sizeof(de))
+      panic("rename: unlink target");
+    target->nlink--;
+    iupdate(target);
+    iunlockput(target);
+    target = 0;
+  }
+
+  if (dirlink(new_dp, new_name, ip->inum) < 0)
+    goto bad_new_dp;
+
+  memset(&de, 0, sizeof(de));
+  if (writei(old_dp, 0, (uint64)&de, old_off, sizeof(de)) != sizeof(de))
+    panic("rename: unlink old");
+
+  iunlockput(new_dp);
+  iunlockput(ip);
+  iunlockput(old_dp);
+  return 0;
+
+bad_target:
+  if (target)
+    iunlockput(target);
+bad_new_dp:
+  if (new_dp)
+    iunlockput(new_dp);
+bad_ip:
+  if (ip)
+    iunlockput(ip);
+bad_old_dp:
+  if (old_dp)
+    iunlockput(old_dp);
+  return -1;
+}
+
 uint64 sys_sbrk(void)
 {
   int addr;

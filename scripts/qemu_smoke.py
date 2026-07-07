@@ -223,6 +223,7 @@ def test_shell(q):
     out = q.command("ls /bin")
     require(out, "vi", "vi editor in /bin")
     require(out, "grep", "grep tool in /bin")
+    require(out, "install", "install tool in /bin")
     forbid(out, "edit", "removed edit alias in /bin")
     forbid(out, "kilo", "removed kilo editor in /bin")
 
@@ -389,6 +390,35 @@ def test_cp_tool(q):
     require(out, "\n1\n", "cp usage exit status")
 
 
+def test_install_tool(q):
+    cleanup(q, "inst_src.txt", "inst_dst.txt", "inst_s.txt", "lines2")
+
+    q.command("echo alpha > inst_src.txt")
+    q.command("echo beta >> inst_src.txt")
+    out = q.command("install inst_src.txt inst_dst.txt")
+    forbid(out, "install:", "install successful copy has no error")
+    out = q.command("cat inst_dst.txt")
+    require(out, "alpha", "install copied first line")
+    require(out, "beta", "install copied second line")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "install success exit status")
+
+    q.command("echo very-long-stale-tail > inst_dst.txt")
+    q.command("echo z > inst_s.txt")
+    q.command("install inst_s.txt inst_dst.txt")
+    out = q.command("cat inst_dst.txt")
+    require(out, "\nz\n", "install overwrote destination")
+    forbid(out, "very-long-stale-tail", "install truncates destination")
+
+    q.command("install missing.txt inst_dst.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "install missing-source exit status")
+
+    q.command("install inst_src.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "install usage exit status")
+
+
 def test_mv_tool(q):
     cleanup(q, "mv_src.txt", "mv_dst.txt", "mv_same.txt", "mv_old.txt", "mv_short.txt")
 
@@ -456,6 +486,44 @@ def test_cmp_tool(q):
     q.command("cmp cmp_a.txt")
     out = q.command("echo $?")
     require(out, "\n1\n", "cmp usage exit status")
+
+
+def test_diff_tool(q):
+    cleanup(q, "diff_a.txt", "diff_b.txt", "diff_c.txt", "diff_d.txt")
+
+    q.command("echo alpha > diff_a.txt")
+    q.command("echo beta >> diff_a.txt")
+    q.command("echo alpha > diff_b.txt")
+    q.command("echo beta >> diff_b.txt")
+    out = q.command("diff diff_a.txt diff_b.txt")
+    forbid(out, "differ", "diff identical files are quiet")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "diff identical exit status")
+
+    q.command("echo alpha > diff_c.txt")
+    q.command("echo zeta >> diff_c.txt")
+    out = q.command("diff diff_a.txt diff_c.txt")
+    require(out, "diff_a.txt diff_c.txt differ: line 2", "diff differing line header")
+    require(out, "- beta", "diff removed line")
+    require(out, "+ zeta", "diff added line")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "diff differing exit status")
+
+    q.command("echo alpha > diff_d.txt")
+    out = q.command("diff diff_a.txt diff_d.txt")
+    require(out, "diff_a.txt diff_d.txt differ: line 2", "diff EOF line header")
+    require(out, "- beta", "diff EOF removed line")
+    require(out, "+ <EOF>", "diff EOF marker")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "diff EOF exit status")
+
+    q.command("diff diff_a.txt missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n-1\n", "diff missing-file exit status")
+
+    q.command("diff diff_a.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "diff usage exit status")
 
 
 def test_head_tail_tools(q):
@@ -537,12 +605,90 @@ def test_hexdump_tool(q):
 
 
 def test_build_tool(q):
-    cleanup(q, "rt_libc", "rt_fs", "build.log", "ct_trunc", "ct_stdio", "ct_seek")
+    cleanup(
+        q,
+        "rt_libc",
+        "rt_fs",
+        "build.log",
+        "ct_trunc",
+        "ct_stdio",
+        "ct_seek",
+        "fs_basic",
+        "fs_trunc",
+        "fs_unlink",
+        "fs_seek",
+        "fs_offset",
+        "cat2",
+        "cat2.txt",
+        "diff2",
+        "diff2a.txt",
+        "diff2b.txt",
+        "grep2",
+        "grep2a.txt",
+        "grep2b.txt",
+        "hello",
+        "lines",
+        "lines.txt",
+        "wc2",
+        "wc2a.txt",
+        "wc2b.txt",
+        "/bin/cat2",
+        "/bin/diff2",
+        "/bin/grep2",
+        "/bin/hello",
+        "/bin/lines",
+        "/bin/wc2",
+    )
+
+    out = q.command("cat /src/Buildfile", timeout=5)
+    require(out, "libc-contract cc /src/tests/libc_ct.c rt_libc contracts /src/tests/libc_ct.c", "build file libc target")
+    require(out, "fs-contract cc /src/tests/fs_ct.c rt_fs contracts /src/tests/fs_ct.c", "build file fs target")
+    require(out, "cat2 cc /src/userland/cat.c cat2 userland /src/userland/cat.c", "build file cat2 target")
+    require(out, "diff2 cc /src/userland/diff.c diff2 userland /src/userland/diff.c", "build file diff2 target")
+    require(out, "grep2 cc /src/userland/grep.c grep2 userland /src/userland/grep.c", "build file grep2 target")
+    require(out, "hello cc /src/userland/hello.c hello userland /src/userland/hello.c", "build file userland target")
+    require(out, "lines cc /src/userland/lines.c lines userland /src/userland/lines.c", "build file lines target")
+    require(out, "wc2 cc /src/userland/wc.c wc2 userland /src/userland/wc.c", "build file wc2 target")
+    require(out, "cat2-install copy cat2 /bin/cat2 install @cat2", "build file cat2 install target")
+    require(out, "diff2-install copy diff2 /bin/diff2 install @diff2", "build file diff2 install target")
+    require(out, "grep2-install copy grep2 /bin/grep2 install @grep2", "build file grep2 install target")
+    require(out, "hello-install copy hello /bin/hello install @hello", "build file install target")
+    require(out, "lines-install copy lines /bin/lines install @lines", "build file lines install target")
+    require(out, "wc2-install copy wc2 /bin/wc2 install @wc2", "build file wc2 install target")
+    require(out, "world phony - - world @libc-contract,@fs-contract,@cat2-install,@diff2-install,@grep2-install,@hello-install,@lines-install,@wc2-install", "build file world target")
+    out = q.command("cat /src/userland/cat.c", timeout=5)
+    require(out, "cat2: cannot open", "userland cat2 source")
+    out = q.command("cat /src/userland/diff.c", timeout=5)
+    require(out, "diff2: cannot open", "userland diff2 source")
+    out = q.command("cat /src/userland/grep.c", timeout=5)
+    require(out, "grep2: cannot open", "userland grep2 source")
+    out = q.command("cat /src/userland/hello.c", timeout=5)
+    require(out, "HELLO_USERLAND", "userland hello source")
+    out = q.command("cat /src/userland/lines.c", timeout=5)
+    require(out, "count_fd", "userland lines source")
+    out = q.command("cat /src/userland/wc.c", timeout=5)
+    require(out, "wc2: cannot open", "userland wc2 source")
 
     out = q.command("build list", timeout=5)
     require(out, "contracts:", "build list contracts group")
     require(out, "libc-contract", "build list libc target")
     require(out, "fs-contract", "build list fs target")
+    require(out, "userland:", "build list userland group")
+    require(out, "cat2", "build list cat2 target")
+    require(out, "diff2", "build list diff2 target")
+    require(out, "grep2", "build list grep2 target")
+    require(out, "hello", "build list hello target")
+    require(out, "lines", "build list lines target")
+    require(out, "wc2", "build list wc2 target")
+    require(out, "install:", "build list install group")
+    require(out, "cat2-install", "build list cat2 install target")
+    require(out, "diff2-install", "build list diff2 install target")
+    require(out, "grep2-install", "build list grep2 install target")
+    require(out, "hello-install", "build list hello install target")
+    require(out, "lines-install", "build list lines install target")
+    require(out, "wc2-install", "build list wc2 install target")
+    require(out, "world:", "build list world group")
+    require(out, "world", "build list world target")
 
     out = q.command("build help", timeout=5)
     require(out, "usage: build", "build help usage")
@@ -552,11 +698,251 @@ def test_build_tool(q):
     out = q.command("./rt_libc", timeout=10)
     require(out, "LIBC_CONTRACT_PASS", "built libc contract runs")
 
+    out = q.command("build libc-contract", timeout=10)
+    require(out, "BUILD_SKIP libc-contract", "build libc contract skip")
+
+    out = q.command("build contracts", timeout=60)
+    require(out, "BUILD_SKIP libc-contract", "build contracts libc skip")
+    require(out, "BUILD_PASS fs-contract", "build contracts fs pass")
+
+    out = q.command("build contracts", timeout=10)
+    require(out, "BUILD_SKIP libc-contract", "build contracts libc second skip")
+    require(out, "BUILD_SKIP fs-contract", "build contracts fs skip")
+
+    out = q.command("build userland", timeout=30)
+    require(out, "BUILD_PASS cat2", "build userland cat2 pass")
+    require(out, "BUILD_PASS diff2", "build userland diff2 pass")
+    require(out, "BUILD_PASS grep2", "build userland grep2 pass")
+    require(out, "BUILD_PASS hello", "build userland hello pass")
+    require(out, "BUILD_PASS lines", "build userland lines pass")
+    require(out, "BUILD_PASS wc2", "build userland wc2 pass")
+    q.command("echo alpha > cat2.txt")
+    q.command("echo beta >> cat2.txt")
+    out = q.command("./cat2 cat2.txt", timeout=10)
+    require(out, "alpha", "built cat2 reads file first line")
+    require(out, "beta", "built cat2 reads file second line")
+    out = q.command("cat cat2.txt | ./cat2", timeout=10)
+    require(out, "alpha", "built cat2 reads stdin first line")
+    require(out, "beta", "built cat2 reads stdin second line")
+    q.command("./cat2 missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "built cat2 missing-file exit status")
+    q.command("echo alpha beta > wc2a.txt")
+    q.command("echo gamma >> wc2a.txt")
+    q.command("echo z > wc2b.txt")
+    out = q.command("./wc2 wc2a.txt", timeout=10)
+    require(out, "2 3 17 wc2a.txt", "built wc2 single file counts")
+    out = q.command("cat wc2a.txt | ./wc2", timeout=10)
+    require(out, "2 3 17", "built wc2 stdin counts")
+    out = q.command("./wc2 wc2a.txt wc2b.txt", timeout=10)
+    require(out, "2 3 17 wc2a.txt", "built wc2 multi first counts")
+    require(out, "1 1 2 wc2b.txt", "built wc2 multi second counts")
+    require(out, "3 4 19 total", "built wc2 total counts")
+    q.command("./wc2 missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "built wc2 missing-file exit status")
+    q.command("echo alpha > grep2a.txt")
+    q.command("echo beta >> grep2a.txt")
+    q.command("echo gamma >> grep2a.txt")
+    q.command("echo beta-two > grep2b.txt")
+    out = q.command("./grep2 beta grep2a.txt", timeout=10)
+    require(out, "beta", "built grep2 file match")
+    forbid(out, "alpha", "built grep2 excludes nonmatch")
+    out = q.command("cat grep2a.txt | ./grep2 gamma", timeout=10)
+    require(out, "gamma", "built grep2 stdin match")
+    out = q.command("./grep2 beta grep2a.txt grep2b.txt", timeout=10)
+    require(out, "grep2a.txt:beta", "built grep2 multi first prefix")
+    require(out, "grep2b.txt:beta-two", "built grep2 multi second prefix")
+    q.command("./grep2 absent grep2a.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "built grep2 no-match exit status")
+    q.command("./grep2 beta missing.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "built grep2 missing-file exit status")
+    q.command("echo alpha > diff2a.txt")
+    q.command("echo beta >> diff2a.txt")
+    q.command("echo alpha > diff2b.txt")
+    q.command("echo zeta >> diff2b.txt")
+    out = q.command("./diff2 diff2a.txt diff2a.txt", timeout=10)
+    forbid(out, "differ", "built diff2 identical files are quiet")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "built diff2 identical exit status")
+    out = q.command("./diff2 diff2a.txt diff2b.txt", timeout=10)
+    require(out, "diff2a.txt diff2b.txt differ: line 2", "built diff2 line header")
+    require(out, "- beta", "built diff2 removed line")
+    require(out, "+ zeta", "built diff2 added line")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "built diff2 differing exit status")
+    out = q.command("./hello", timeout=10)
+    require(out, "HELLO_USERLAND", "built userland hello runs")
+    q.command("echo one > lines.txt")
+    q.command("echo two >> lines.txt")
+    q.command("echo three >> lines.txt")
+    out = q.command("./lines lines.txt", timeout=10)
+    require(out, "\n3\n", "built userland lines counts file")
+    out = q.command("cat lines.txt | ./lines", timeout=10)
+    require(out, "\n3\n", "built userland lines counts stdin")
+    out = q.command("build install", timeout=10)
+    require(out, "BUILD_PASS cat2-install", "build install cat2 pass")
+    require(out, "BUILD_PASS diff2-install", "build install diff2 pass")
+    require(out, "BUILD_PASS grep2-install", "build install grep2 pass")
+    require(out, "BUILD_PASS hello-install", "build install hello pass")
+    require(out, "BUILD_PASS lines-install", "build install lines pass")
+    require(out, "BUILD_PASS wc2-install", "build install wc2 pass")
+    out = q.command("/bin/cat2 cat2.txt", timeout=10)
+    require(out, "alpha", "installed cat2 reads file first line")
+    require(out, "beta", "installed cat2 reads file second line")
+    out = q.command("cat cat2.txt | /bin/cat2", timeout=10)
+    require(out, "alpha", "installed cat2 reads stdin first line")
+    require(out, "beta", "installed cat2 reads stdin second line")
+    out = q.command("/bin/wc2 wc2a.txt", timeout=10)
+    require(out, "2 3 17 wc2a.txt", "installed wc2 single file counts")
+    out = q.command("cat wc2a.txt | /bin/wc2", timeout=10)
+    require(out, "2 3 17", "installed wc2 stdin counts")
+    out = q.command("/bin/grep2 beta grep2a.txt", timeout=10)
+    require(out, "beta", "installed grep2 file match")
+    forbid(out, "alpha", "installed grep2 excludes nonmatch")
+    out = q.command("cat grep2a.txt | /bin/grep2 gamma", timeout=10)
+    require(out, "gamma", "installed grep2 stdin match")
+    out = q.command("/bin/diff2 diff2a.txt diff2b.txt", timeout=10)
+    require(out, "diff2a.txt diff2b.txt differ: line 2", "installed diff2 line header")
+    require(out, "- beta", "installed diff2 removed line")
+    require(out, "+ zeta", "installed diff2 added line")
+    out = q.command("/bin/hello", timeout=10)
+    require(out, "HELLO_USERLAND", "installed userland hello runs")
+    out = q.command("/bin/lines lines.txt", timeout=10)
+    require(out, "\n3\n", "installed userland lines counts file")
+    out = q.command("cat lines.txt | /bin/lines", timeout=10)
+    require(out, "\n3\n", "installed userland lines counts stdin")
+    out = q.command("install lines /bin/lines2", timeout=10)
+    forbid(out, "install:", "install self-built lines has no error")
+    out = q.command("/bin/lines2 lines.txt", timeout=10)
+    require(out, "\n3\n", "install tool installs self-built lines")
+    cleanup(q, "cat2", "diff2", "grep2", "hello", "lines", "wc2", "/bin/cat2", "/bin/diff2", "/bin/grep2", "/bin/hello", "/bin/lines", "/bin/wc2")
+    out = q.command("build install", timeout=90)
+    require(out, "BUILD_PASS cat2", "build install auto-builds cat2")
+    require(out, "BUILD_PASS diff2", "build install auto-builds diff2")
+    require(out, "BUILD_PASS grep2", "build install auto-builds grep2")
+    require(out, "BUILD_PASS hello", "build install auto-builds hello")
+    require(out, "BUILD_PASS lines", "build install auto-builds lines")
+    require(out, "BUILD_PASS wc2", "build install auto-builds wc2")
+    require(out, "BUILD_PASS cat2-install", "build install installs auto-built cat2")
+    require(out, "BUILD_PASS diff2-install", "build install installs auto-built diff2")
+    require(out, "BUILD_PASS grep2-install", "build install installs auto-built grep2")
+    require(out, "BUILD_PASS hello-install", "build install installs auto-built hello")
+    require(out, "BUILD_PASS lines-install", "build install installs auto-built lines")
+    require(out, "BUILD_PASS wc2-install", "build install installs auto-built wc2")
+    out = q.command("/bin/wc2 wc2a.txt", timeout=10)
+    require(out, "2 3 17 wc2a.txt", "auto-built installed wc2 runs")
+    out = q.command("/bin/grep2 beta grep2a.txt", timeout=10)
+    require(out, "beta", "auto-built installed grep2 runs")
+    out = q.command("/bin/diff2 diff2a.txt diff2b.txt", timeout=10)
+    require(out, "differ: line 2", "auto-built installed diff2 runs")
+    out = q.command("build install", timeout=10)
+    require(out, "BUILD_SKIP cat2-install", "build install cat2 skip")
+    require(out, "BUILD_SKIP diff2-install", "build install diff2 skip")
+    require(out, "BUILD_SKIP grep2-install", "build install grep2 skip")
+    require(out, "BUILD_SKIP hello-install", "build install hello skip")
+    require(out, "BUILD_SKIP lines-install", "build install lines skip")
+    require(out, "BUILD_SKIP wc2-install", "build install wc2 skip")
+
+    cleanup(
+        q,
+        "rt_libc",
+        "rt_fs",
+        "cat2",
+        "diff2",
+        "grep2",
+        "hello",
+        "lines",
+        "wc2",
+        "/bin/cat2",
+        "/bin/diff2",
+        "/bin/grep2",
+        "/bin/hello",
+        "/bin/lines",
+        "/bin/wc2",
+    )
+    out = q.command("build world", timeout=120)
+    require(out, "BUILD_PASS libc-contract", "build world libc contract pass")
+    require(out, "BUILD_PASS fs-contract", "build world fs contract pass")
+    require(out, "BUILD_PASS cat2", "build world cat2 pass")
+    require(out, "BUILD_PASS diff2", "build world diff2 pass")
+    require(out, "BUILD_PASS grep2", "build world grep2 pass")
+    require(out, "BUILD_PASS hello", "build world hello pass")
+    require(out, "BUILD_PASS lines", "build world lines pass")
+    require(out, "BUILD_PASS wc2", "build world wc2 pass")
+    require(out, "BUILD_PASS cat2-install", "build world cat2 install pass")
+    require(out, "BUILD_PASS diff2-install", "build world diff2 install pass")
+    require(out, "BUILD_PASS grep2-install", "build world grep2 install pass")
+    require(out, "BUILD_PASS hello-install", "build world hello install pass")
+    require(out, "BUILD_PASS lines-install", "build world lines install pass")
+    require(out, "BUILD_PASS wc2-install", "build world wc2 install pass")
+    require(out, "BUILD_PASS world", "build world target pass")
+    out = q.command("./rt_libc", timeout=10)
+    require(out, "LIBC_CONTRACT_PASS", "build world libc contract runs")
+    out = q.command("./rt_fs", timeout=10)
+    require(out, "FS_CONTRACT_PASS", "build world fs contract runs")
+    out = q.command("/bin/wc2 wc2a.txt", timeout=10)
+    require(out, "2 3 17 wc2a.txt", "build world installed wc2 runs")
+    out = q.command("/bin/grep2 beta grep2a.txt", timeout=10)
+    require(out, "beta", "build world installed grep2 runs")
+    out = q.command("/bin/diff2 diff2a.txt diff2b.txt", timeout=10)
+    require(out, "differ: line 2", "build world installed diff2 runs")
+
+    q.command("echo bad cc /src/tests/nope.c rt_bad scratch /src/tests/nope.c > /src/Buildfile")
+    out = q.command("build bad", timeout=5)
+    require(out, "missing dependency for bad: /src/tests/nope.c", "build missing dependency message")
+    require(out, "BUILD_FAIL bad", "build missing dependency fails")
+    q.command("echo libc-contract cc /src/tests/libc_ct.c rt_libc contracts /src/tests/libc_ct.c > /src/Buildfile")
+    q.command("echo fs-contract cc /src/tests/fs_ct.c rt_fs contracts /src/tests/fs_ct.c >> /src/Buildfile")
+    q.command("echo cat2 cc /src/userland/cat.c cat2 userland /src/userland/cat.c >> /src/Buildfile")
+    q.command("echo diff2 cc /src/userland/diff.c diff2 userland /src/userland/diff.c >> /src/Buildfile")
+    q.command("echo grep2 cc /src/userland/grep.c grep2 userland /src/userland/grep.c >> /src/Buildfile")
+    q.command("echo hello cc /src/userland/hello.c hello userland /src/userland/hello.c >> /src/Buildfile")
+    q.command("echo lines cc /src/userland/lines.c lines userland /src/userland/lines.c >> /src/Buildfile")
+    q.command("echo wc2 cc /src/userland/wc.c wc2 userland /src/userland/wc.c >> /src/Buildfile")
+    q.command("echo cat2-install copy cat2 /bin/cat2 install @cat2 >> /src/Buildfile")
+    q.command("echo diff2-install copy diff2 /bin/diff2 install @diff2 >> /src/Buildfile")
+    q.command("echo grep2-install copy grep2 /bin/grep2 install @grep2 >> /src/Buildfile")
+    q.command("echo hello-install copy hello /bin/hello install @hello >> /src/Buildfile")
+    q.command("echo lines-install copy lines /bin/lines install @lines >> /src/Buildfile")
+    q.command("echo wc2-install copy wc2 /bin/wc2 install @wc2 >> /src/Buildfile")
+    q.command("echo world phony - - world @libc-contract,@fs-contract,@cat2-install,@diff2-install,@grep2-install,@hello-install,@lines-install,@wc2-install >> /src/Buildfile")
+
     q.command("build missing")
     out = q.command("echo $?")
     require(out, "\n1\n", "build unknown target exit status")
 
-    cleanup(q, "rt_libc", "build.log", "ct_trunc", "ct_stdio", "ct_seek")
+    cleanup(
+        q,
+        "rt_libc",
+        "rt_fs",
+        "build.log",
+        "ct_trunc",
+        "ct_stdio",
+        "ct_seek",
+        "fs_basic",
+        "fs_trunc",
+        "fs_unlink",
+        "fs_seek",
+        "fs_offset",
+        "cat2",
+        "cat2.txt",
+        "diff2",
+        "diff2a.txt",
+        "diff2b.txt",
+        "grep2",
+        "grep2a.txt",
+        "grep2b.txt",
+        "hello",
+        "lines",
+        "lines.txt",
+        "wc2",
+        "wc2a.txt",
+        "wc2b.txt",
+        "lines2",
+    )
 
 
 def test_runtests_tool(q):
@@ -565,8 +951,13 @@ def test_runtests_tool(q):
     out = q.command("runtests list", timeout=5)
     require(out, "tools:", "runtests list tools group")
     require(out, "  wc", "runtests list wc")
+    require(out, "  diff", "runtests list diff")
     require(out, "contracts:", "runtests list contracts group")
     require(out, "  fs-contract", "runtests list fs contract")
+    require(out, "world:", "runtests list world group")
+    require(out, "  build-world", "runtests list build world")
+    require(out, "  diff2", "runtests list diff2")
+    require(out, "  wc2", "runtests list wc2")
 
     out = q.command("runtests help", timeout=5)
     require(out, "usage: runtests", "runtests help usage")
@@ -575,6 +966,7 @@ def test_runtests_tool(q):
     out = q.command("runtests", timeout=60)
     require(out, "PASS cp-cmp", "runtests cp/cmp pass")
     require(out, "PASS cmp-diff", "runtests cmp-diff pass")
+    require(out, "PASS diff", "runtests diff pass")
     require(out, "PASS wc", "runtests wc pass")
     require(out, "PASS head", "runtests head pass")
     require(out, "PASS tail", "runtests tail pass")
@@ -582,7 +974,7 @@ def test_runtests_tool(q):
     require(out, "PASS mv", "runtests mv pass")
     require(out, "PASS libc-contract", "runtests libc contract pass")
     require(out, "PASS fs-contract", "runtests fs contract pass")
-    require(out, "SUMMARY 9 passed 0 failed", "runtests summary")
+    require(out, "SUMMARY 10 passed 0 failed", "runtests summary")
     require(out, "RUNTESTS_PASS", "runtests pass marker")
 
     out = q.command("echo $?")
@@ -590,9 +982,22 @@ def test_runtests_tool(q):
 
     out = q.command("runtests tools", timeout=20)
     require(out, "PASS cp-cmp", "runtests tools cp/cmp pass")
+    require(out, "PASS diff", "runtests tools diff pass")
     require(out, "PASS mv", "runtests tools mv pass")
-    require(out, "SUMMARY 7 passed 0 failed", "runtests tools summary")
+    require(out, "SUMMARY 8 passed 0 failed", "runtests tools summary")
     forbid(out, "libc-contract", "runtests tools skips contracts")
+
+    out = q.command("runtests world", timeout=120)
+    require(out, "PASS build-world", "runtests world build pass")
+    require(out, "PASS world-contracts", "runtests world contracts pass")
+    require(out, "PASS cat2", "runtests world cat2 pass")
+    require(out, "PASS diff2", "runtests world diff2 pass")
+    require(out, "PASS wc2", "runtests world wc2 pass")
+    require(out, "PASS grep2", "runtests world grep2 pass")
+    require(out, "PASS lines", "runtests world lines pass")
+    require(out, "PASS hello", "runtests world hello pass")
+    require(out, "SUMMARY 8 passed 0 failed", "runtests world summary")
+    require(out, "RUNTESTS_PASS", "runtests world pass marker")
 
     out = q.command("runtests wc", timeout=10)
     require(out, "PASS wc", "runtests single wc pass")
@@ -657,6 +1062,142 @@ def test_tcc_scanf(q):
     out = q.read_until(PROMPT, timeout=8, label="prompt after ./hello")
     require(out, "42", "scanf input echo")
     require(out, "x=42", "scanf runtime result")
+
+
+def test_cxx_contract(q):
+    out = q.command("cat /src/tests/cxx_ct.cc", timeout=5)
+    require(out, "CXX_CONTRACT_PASS", "cxx contract source in image")
+    require(out, "class Multiplier", "cxx contract class source")
+
+    out = q.command("cxxtest", timeout=10)
+    require(out, "CXX_CONTRACT_PASS", "cxx contract pass marker")
+    forbid(out, "CXX_CONTRACT_FAIL", "cxx contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "cxx contract exit status")
+
+
+def test_gcc_contract(q):
+    out = q.command("gcctest", timeout=10)
+    require(out, "LIBC_CONTRACT_PASS", "gcc-built libc contract pass marker")
+    forbid(out, "LIBC_CONTRACT_FAIL", "gcc-built libc contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "gcc-built libc contract exit status")
+
+
+def test_gcc_static_contract(q):
+    cleanup(q, "gs_stdio", "gs_raw", "gs_ren", "gs_exec")
+
+    out = q.command("cat /src/tests/gccst_main.c", timeout=5)
+    require(out, "GCC_STATIC_PASS", "gcc static main source in image")
+    require(out, "test_pipe_fork_wait", "gcc static main covers pipe/fork/wait")
+    out = q.command("cat /src/tests/gccst_lib.c", timeout=5)
+    require(out, "gcc_static_count_words", "gcc static lib source in image")
+    out = q.command("cat /src/tests/gccst_lib.h", timeout=5)
+    require(out, "gcc_static_weighted_arg_len", "gcc static header in image")
+
+    out = q.command("gccstatictest alpha beta", timeout=15)
+    require(out, "GCC_STATIC_PASS", "gcc static contract pass marker")
+    forbid(out, "GCC_STATIC_FAIL", "gcc static contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "gcc static contract exit status")
+
+
+def test_gcc_userland(q):
+    cleanup(q, "gcc_a.txt", "gcc_b.txt", "gcc_lines.txt")
+
+    out = q.command("gcc-hello", timeout=10)
+    require(out, "HELLO_USERLAND", "gcc-built hello output")
+
+    q.command("echo alpha beta > gcc_a.txt")
+    q.command("echo gamma >> gcc_a.txt")
+    q.command("echo alpha beta > gcc_b.txt")
+    q.command("echo zeta >> gcc_b.txt")
+
+    out = q.command("gcc-cat gcc_a.txt", timeout=10)
+    require(out, "alpha beta", "gcc-built cat reads first line")
+    require(out, "gamma", "gcc-built cat reads second line")
+
+    out = q.command("cat gcc_a.txt | gcc-cat", timeout=10)
+    require(out, "alpha beta", "gcc-built cat reads stdin")
+    require(out, "gamma", "gcc-built cat stdin second line")
+
+    out = q.command("gcc-wc gcc_a.txt", timeout=10)
+    require(out, "2 3 17 gcc_a.txt", "gcc-built wc counts file")
+
+    out = q.command("cat gcc_a.txt | gcc-wc", timeout=10)
+    require(out, "2 3 17", "gcc-built wc counts stdin")
+
+    out = q.command("gcc-grep beta gcc_a.txt", timeout=10)
+    require(out, "alpha beta", "gcc-built grep file match")
+    forbid(out, "gamma", "gcc-built grep excludes nonmatch")
+
+    out = q.command("cat gcc_a.txt | gcc-grep gamma", timeout=10)
+    require(out, "gamma", "gcc-built grep stdin match")
+
+    q.command("echo one > gcc_lines.txt")
+    q.command("echo two >> gcc_lines.txt")
+    q.command("echo three >> gcc_lines.txt")
+    out = q.command("gcc-lines gcc_lines.txt", timeout=10)
+    require(out, "\n3\n", "gcc-built lines counts file")
+
+    out = q.command("cat gcc_lines.txt | gcc-lines", timeout=10)
+    require(out, "\n3\n", "gcc-built lines counts stdin")
+
+    out = q.command("gcc-diff gcc_a.txt gcc_b.txt", timeout=10)
+    require(out, "gcc_a.txt gcc_b.txt differ: line 2", "gcc-built diff line header")
+    require(out, "- gamma", "gcc-built diff removed line")
+    require(out, "+ zeta", "gcc-built diff added line")
+
+    q.command("gcc-grep absent gcc_a.txt")
+    out = q.command("echo $?")
+    require(out, "\n1\n", "gcc-built grep no-match exit status")
+
+
+def test_cxx_std_contract(q):
+    out = q.command("cat /src/tests/cxxstd_ct.cc", timeout=5)
+    require(out, "CXX_STD_CONTRACT_PASS", "cxx std contract source in image")
+    require(out, "std::array", "cxx std contract uses array")
+
+    out = q.command("cat /include/c++/array", timeout=5)
+    require(out, "namespace std", "cxx array header in image")
+    out = q.command("cat /include/c++/algorithm", timeout=5)
+    require(out, "sort", "cxx algorithm header in image")
+
+    out = q.command("cxxstdtest", timeout=10)
+    require(out, "CXX_STD_CONTRACT_PASS", "cxx std contract pass marker")
+    forbid(out, "CXX_STD_CONTRACT_FAIL", "cxx std contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "cxx std contract exit status")
+
+
+def test_cxx_dyn_contract(q):
+    out = q.command("cat /src/tests/cxxdyn_ct.cc", timeout=5)
+    require(out, "CXX_DYN_CONTRACT_PASS", "cxx dyn contract source in image")
+    require(out, "std::vector", "cxx dyn contract uses vector")
+    require(out, "std::string", "cxx dyn contract uses string")
+
+    out = q.command("cat /include/c++/vector", timeout=5)
+    require(out, "class vector", "cxx vector header in image")
+    out = q.command("cat /include/c++/string", timeout=5)
+    require(out, "class string", "cxx string header in image")
+
+    out = q.command("cxxdyntest", timeout=10)
+    require(out, "CXX_DYN_CONTRACT_PASS", "cxx dyn contract pass marker")
+    forbid(out, "CXX_DYN_CONTRACT_FAIL", "cxx dyn contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "cxx dyn contract exit status")
+
+
+def test_gxx_contract(q):
+    out = q.command("cat /src/tests/gxx_ct.cc", timeout=5)
+    require(out, "GXX_CONTRACT_PASS", "gxx contract source in image")
+    require(out, "snprintf", "gxx contract uses libc header")
+
+    out = q.command("gxxtest", timeout=10)
+    require(out, "GXX_CONTRACT_PASS cpp-gxx-myos:3", "gxx contract pass marker")
+    forbid(out, "GXX_CONTRACT_FAIL", "gxx contract failure marker")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "gxx contract exit status")
 
 
 def test_libc_contract(q):
@@ -771,14 +1312,23 @@ def main():
         ("grep", test_grep_tool),
         ("wc", test_wc_tool),
         ("cp", test_cp_tool),
+        ("install", test_install_tool),
         ("mv", test_mv_tool),
         ("cmp", test_cmp_tool),
+        ("diff", test_diff_tool),
         ("head-tail", test_head_tail_tools),
         ("hexdump", test_hexdump_tool),
         ("build", test_build_tool),
         ("runtests", test_runtests_tool),
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),
+        ("gcc-contract", test_gcc_contract),
+        ("gcc-static-contract", test_gcc_static_contract),
+        ("gcc-userland", test_gcc_userland),
+        ("cxx-contract", test_cxx_contract),
+        ("cxx-std-contract", test_cxx_std_contract),
+        ("cxx-dyn-contract", test_cxx_dyn_contract),
+        ("gxx-contract", test_gxx_contract),
         ("libc-contract", test_libc_contract),
         ("fs-contract", test_fs_contract),
         ("tty-contract", test_tty_contract),

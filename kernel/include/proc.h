@@ -29,6 +29,7 @@
 #define SYS_unlink 24
 #define SYS_lseek 25
 #define SYS_ioctl 27
+#define SYS_rename 28
 
 #define SEEK_SET 0
 #define SEEK_CUR 1

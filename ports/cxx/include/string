@@ -1,0 +1,252 @@
+#ifndef MYOS_CXX_STRING
+#define MYOS_CXX_STRING
+
+#include <cstddef>
+#include <new>
+#include <utility>
+
+namespace std
+{
+class string
+{
+public:
+    using size_type = size_t;
+    using value_type = char;
+    using reference = char &;
+    using const_reference = const char &;
+    using iterator = char *;
+    using const_iterator = const char *;
+
+    string() : data_(nullptr), size_(0), capacity_(0)
+    {
+        reserve(1);
+        data_[0] = 0;
+    }
+
+    string(const char *text) : data_(nullptr), size_(0), capacity_(0)
+    {
+        reserve(cstr_len(text) + 1);
+        append(text);
+    }
+
+    string(const string &other) : data_(nullptr), size_(0), capacity_(0)
+    {
+        reserve(other.size_ + 1);
+        append(other.c_str());
+    }
+
+    string(string &&other) noexcept
+        : data_(other.data_), size_(other.size_), capacity_(other.capacity_)
+    {
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+    }
+
+    ~string()
+    {
+        operator delete(data_);
+    }
+
+    string &operator=(const string &other)
+    {
+        if (this == &other)
+            return *this;
+        clear();
+        reserve(other.size_ + 1);
+        append(other.c_str());
+        return *this;
+    }
+
+    string &operator=(string &&other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        operator delete(data_);
+        data_ = other.data_;
+        size_ = other.size_;
+        capacity_ = other.capacity_;
+        other.data_ = nullptr;
+        other.size_ = 0;
+        other.capacity_ = 0;
+        return *this;
+    }
+
+    string &operator+=(const char *text)
+    {
+        append(text);
+        return *this;
+    }
+
+    string &operator+=(const string &other)
+    {
+        append(other.c_str());
+        return *this;
+    }
+
+    string &operator+=(char ch)
+    {
+        push_back(ch);
+        return *this;
+    }
+
+    void push_back(char ch)
+    {
+        reserve(size_ + 2);
+        data_[size_++] = ch;
+        data_[size_] = 0;
+    }
+
+    void append(const char *text)
+    {
+        if (!text)
+            return;
+        size_type len = cstr_len(text);
+        reserve(size_ + len + 1);
+        for (size_type i = 0; i < len; i++)
+            data_[size_ + i] = text[i];
+        size_ += len;
+        data_[size_] = 0;
+    }
+
+    void clear()
+    {
+        size_ = 0;
+        if (data_)
+            data_[0] = 0;
+    }
+
+    void reserve(size_type new_capacity)
+    {
+        if (new_capacity <= capacity_)
+            return;
+
+        char *new_data = static_cast<char *>(operator new(new_capacity));
+        for (size_type i = 0; i < size_; i++)
+            new_data[i] = data_[i];
+        new_data[size_] = 0;
+        operator delete(data_);
+        data_ = new_data;
+        capacity_ = new_capacity;
+    }
+
+    reference operator[](size_type index)
+    {
+        return data_[index];
+    }
+
+    const_reference operator[](size_type index) const
+    {
+        return data_[index];
+    }
+
+    const char *c_str() const noexcept
+    {
+        return data_ ? data_ : "";
+    }
+
+    size_type size() const noexcept
+    {
+        return size_;
+    }
+
+    size_type capacity() const noexcept
+    {
+        return capacity_;
+    }
+
+    bool empty() const noexcept
+    {
+        return size_ == 0;
+    }
+
+    iterator begin() noexcept
+    {
+        return data_;
+    }
+
+    const_iterator begin() const noexcept
+    {
+        return data_;
+    }
+
+    iterator end() noexcept
+    {
+        return data_ + size_;
+    }
+
+    const_iterator end() const noexcept
+    {
+        return data_ + size_;
+    }
+
+private:
+    static size_type cstr_len(const char *text)
+    {
+        size_type len = 0;
+        if (!text)
+            return 0;
+        while (text[len])
+            len++;
+        return len;
+    }
+
+    char *data_;
+    size_type size_;
+    size_type capacity_;
+};
+
+inline bool operator==(const string &left, const string &right)
+{
+    if (left.size() != right.size())
+        return false;
+    for (string::size_type i = 0; i < left.size(); i++)
+    {
+        if (left[i] != right[i])
+            return false;
+    }
+    return true;
+}
+
+inline bool operator!=(const string &left, const string &right)
+{
+    return !(left == right);
+}
+
+inline bool operator<(const string &left, const string &right)
+{
+    string::size_type i = 0;
+    while (i < left.size() && i < right.size())
+    {
+        if (left[i] < right[i])
+            return true;
+        if (right[i] < left[i])
+            return false;
+        i++;
+    }
+    return left.size() < right.size();
+}
+
+inline string operator+(const string &left, const string &right)
+{
+    string result(left);
+    result += right;
+    return result;
+}
+
+inline string operator+(const string &left, const char *right)
+{
+    string result(left);
+    result += right;
+    return result;
+}
+
+inline string operator+(const char *left, const string &right)
+{
+    string result(left);
+    result += right;
+    return result;
+}
+}
+
+#endif

@@ -212,9 +212,26 @@ static void cleanup_files(void)
     unlink_file("rt_mvsrc");
     unlink_file("rt_mvdst");
     unlink_file("rt_out");
+    unlink_file("rt_diffa");
+    unlink_file("rt_diffb");
+    unlink_file("rt_diffc");
     unlink_file("rt_libc");
     unlink_file("rt_fs");
+    unlink_file("cat2");
+    unlink_file("diff2");
+    unlink_file("grep2");
+    unlink_file("hello");
+    unlink_file("lines");
+    unlink_file("wc2");
     unlink_file("build.log");
+    unlink_file("rt_cat2");
+    unlink_file("rt_diff2a");
+    unlink_file("rt_diff2b");
+    unlink_file("rt_wc2a");
+    unlink_file("rt_wc2b");
+    unlink_file("rt_grep2a");
+    unlink_file("rt_grep2b");
+    unlink_file("rt_lines2");
     unlink_file("ct_trunc");
     unlink_file("ct_stdio");
     unlink_file("ct_seek");
@@ -272,6 +289,30 @@ static int test_cmp_diff(void)
     if (expect_status(argv, "rt_out", 1) < 0)
         return -1;
     return file_contains("rt_out", "differ: byte") ? 0 : -1;
+}
+
+static int test_diff(void)
+{
+    char *same[] = {"/bin/diff", "rt_diffa", "rt_diffb", 0};
+    char *different[] = {"/bin/diff", "rt_diffa", "rt_diffc", 0};
+
+    if (write_file("rt_diffa", "alpha\nbeta\n") < 0)
+        return -1;
+    if (write_file("rt_diffb", "alpha\nbeta\n") < 0)
+        return -1;
+    if (write_file("rt_diffc", "alpha\nzeta\n") < 0)
+        return -1;
+    if (expect_status(same, "rt_out", 0) < 0)
+        return -1;
+    if (file_contains("rt_out", "differ"))
+        return -1;
+    if (expect_status(different, "rt_out", 1) < 0)
+        return -1;
+    if (!file_contains("rt_out", "differ: line 2"))
+        return -1;
+    if (!file_contains("rt_out", "- beta"))
+        return -1;
+    return file_contains("rt_out", "+ zeta") ? 0 : -1;
 }
 
 static int test_wc(void)
@@ -366,6 +407,147 @@ static int test_fs_contract(void)
     return run_contract("./rt_fs", "FS_CONTRACT_PASS");
 }
 
+static int test_build_world(void)
+{
+    char *argv[] = {"/bin/build", "world", 0};
+
+    unlink_file("rt_libc");
+    unlink_file("rt_fs");
+    unlink_file("cat2");
+    unlink_file("diff2");
+    unlink_file("grep2");
+    unlink_file("hello");
+    unlink_file("lines");
+    unlink_file("wc2");
+    unlink_file("/bin/cat2");
+    unlink_file("/bin/diff2");
+    unlink_file("/bin/grep2");
+    unlink_file("/bin/hello");
+    unlink_file("/bin/lines");
+    unlink_file("/bin/wc2");
+
+    if (expect_status(argv, "rt_out", 0) < 0)
+        return -1;
+    if (!file_contains("rt_out", "BUILD_PASS world"))
+        return -1;
+    if (!file_contains("rt_out", "BUILD_PASS libc-contract"))
+        return -1;
+    if (!file_contains("rt_out", "BUILD_PASS fs-contract"))
+        return -1;
+    if (!file_contains("rt_out", "BUILD_PASS diff2-install"))
+        return -1;
+    if (!file_contains("rt_out", "BUILD_PASS wc2-install"))
+        return -1;
+    return 0;
+}
+
+static int test_world_contracts(void)
+{
+    if (run_contract("./rt_libc", "LIBC_CONTRACT_PASS") < 0)
+        return -1;
+    return run_contract("./rt_fs", "FS_CONTRACT_PASS");
+}
+
+static int test_cat2(void)
+{
+    char *argv[] = {"/bin/cat2", "rt_cat2", 0};
+
+    if (write_file("rt_cat2", "alpha\nbeta\n") < 0)
+        return -1;
+    if (expect_status(argv, "rt_out", 0) < 0)
+        return -1;
+    return file_contains("rt_out", "alpha\nbeta\n") ? 0 : -1;
+}
+
+static int test_diff2(void)
+{
+    char *same[] = {"/bin/diff2", "rt_diff2a", "rt_diff2a", 0};
+    char *different[] = {"/bin/diff2", "rt_diff2a", "rt_diff2b", 0};
+
+    if (write_file("rt_diff2a", "alpha\nbeta\n") < 0)
+        return -1;
+    if (write_file("rt_diff2b", "alpha\nzeta\n") < 0)
+        return -1;
+    if (expect_status(same, "rt_out", 0) < 0)
+        return -1;
+    if (file_contains("rt_out", "differ"))
+        return -1;
+    if (expect_status(different, "rt_out", 1) < 0)
+        return -1;
+    if (!file_contains("rt_out", "differ: line 2"))
+        return -1;
+    if (!file_contains("rt_out", "- beta"))
+        return -1;
+    return file_contains("rt_out", "+ zeta") ? 0 : -1;
+}
+
+static int test_wc2(void)
+{
+    char *single[] = {"/bin/wc2", "rt_wc2a", 0};
+    char *multi[] = {"/bin/wc2", "rt_wc2a", "rt_wc2b", 0};
+
+    if (write_file("rt_wc2a", "alpha beta\ngamma\n") < 0)
+        return -1;
+    if (write_file("rt_wc2b", "z\n") < 0)
+        return -1;
+    if (expect_status(single, "rt_out", 0) < 0)
+        return -1;
+    if (!file_contains("rt_out", "2 3 17 rt_wc2a"))
+        return -1;
+    if (expect_status(multi, "rt_out", 0) < 0)
+        return -1;
+    if (!file_contains("rt_out", "2 3 17 rt_wc2a"))
+        return -1;
+    if (!file_contains("rt_out", "1 1 2 rt_wc2b"))
+        return -1;
+    return file_contains("rt_out", "3 4 19 total") ? 0 : -1;
+}
+
+static int test_grep2(void)
+{
+    char *single[] = {"/bin/grep2", "beta", "rt_grep2a", 0};
+    char *multi[] = {"/bin/grep2", "beta", "rt_grep2a", "rt_grep2b", 0};
+    char *absent[] = {"/bin/grep2", "absent", "rt_grep2a", 0};
+
+    if (write_file("rt_grep2a", "alpha\nbeta\ngamma\n") < 0)
+        return -1;
+    if (write_file("rt_grep2b", "beta-two\n") < 0)
+        return -1;
+    if (expect_status(single, "rt_out", 0) < 0)
+        return -1;
+    if (!file_contains("rt_out", "beta"))
+        return -1;
+    if (file_contains("rt_out", "alpha"))
+        return -1;
+    if (expect_status(multi, "rt_out", 0) < 0)
+        return -1;
+    if (!file_contains("rt_out", "rt_grep2a:beta"))
+        return -1;
+    if (!file_contains("rt_out", "rt_grep2b:beta-two"))
+        return -1;
+    return expect_status(absent, "rt_out", 1);
+}
+
+static int test_lines_tool(void)
+{
+    char *argv[] = {"/bin/lines", "rt_lines2", 0};
+
+    if (write_file("rt_lines2", "one\ntwo\nthree\n") < 0)
+        return -1;
+    if (expect_status(argv, "rt_out", 0) < 0)
+        return -1;
+    return file_contains("rt_out", "3\n") ? 0 : -1;
+}
+
+static int test_hello_tool(void)
+{
+    char *argv[] = {"/bin/hello", 0};
+
+    if (expect_status(argv, "rt_out", 0) < 0)
+        return -1;
+    return file_contains("rt_out", "HELLO_USERLAND") ? 0 : -1;
+}
+
 struct test_case
 {
     const char *name;
@@ -376,6 +558,7 @@ struct test_case
 static struct test_case tests[] = {
     {"cp-cmp", "tools", test_cp_cmp},
     {"cmp-diff", "tools", test_cmp_diff},
+    {"diff", "tools", test_diff},
     {"wc", "tools", test_wc},
     {"head", "tools", test_head},
     {"tail", "tools", test_tail},
@@ -383,6 +566,14 @@ static struct test_case tests[] = {
     {"mv", "tools", test_mv},
     {"libc-contract", "contracts", test_libc_contract},
     {"fs-contract", "contracts", test_fs_contract},
+    {"build-world", "world", test_build_world},
+    {"world-contracts", "world", test_world_contracts},
+    {"cat2", "world", test_cat2},
+    {"diff2", "world", test_diff2},
+    {"wc2", "world", test_wc2},
+    {"grep2", "world", test_grep2},
+    {"lines", "world", test_lines_tool},
+    {"hello", "world", test_hello_tool},
 };
 
 static int run_one(const char *name, int (*fn)(void))
@@ -398,14 +589,16 @@ static int run_one(const char *name, int (*fn)(void))
 static int should_run(const struct test_case *test, const char *selector)
 {
     if (selector == 0 || str_eq(selector, "all"))
-        return 1;
+        return !str_eq(test->group, "world");
+    if (str_eq(selector, "world"))
+        return str_eq(test->group, "world");
     return str_eq(selector, test->group) || str_eq(selector, test->name);
 }
 
 static int selector_known(const char *selector)
 {
     if (selector == 0 || str_eq(selector, "all") ||
-        str_eq(selector, "tools") || str_eq(selector, "contracts"))
+        str_eq(selector, "tools") || str_eq(selector, "contracts") || str_eq(selector, "world"))
         return 1;
 
     for (int i = 0; i < (int)(sizeof(tests) / sizeof(tests[0])); i++)
@@ -418,7 +611,7 @@ static int selector_known(const char *selector)
 
 static void print_usage(void)
 {
-    write_str("usage: runtests [all|tools|contracts|list|help|TEST]\n");
+    write_str("usage: runtests [all|tools|contracts|world|list|help|TEST]\n");
 }
 
 static void print_group(const char *group)
@@ -439,6 +632,7 @@ static void print_list(void)
 {
     print_group("tools");
     print_group("contracts");
+    print_group("world");
 }
 
 void main(int argc, char *argv[])
@@ -459,7 +653,7 @@ void main(int argc, char *argv[])
     if (selector && str_eq(selector, "help"))
     {
         print_usage();
-        write_str("groups: all tools contracts\n");
+        write_str("groups: all tools contracts world\n");
         write_str("use 'runtests list' to show test names\n");
         syscall(SYS_exit, 0, 0, 0);
     }

@@ -4,6 +4,7 @@
 # ============================================================
 CROSS   = riscv64-unknown-elf-
 CC      = $(CROSS)gcc
+CXX     = $(CROSS)g++
 LD      = $(CROSS)ld
 OBJDUMP = $(CROSS)objdump
 OBJCOPY = $(CROSS)objcopy
@@ -27,9 +28,19 @@ PORTS_DIR = ports
 TINYCC_DIR = $(PORTS_DIR)/tinycc
 NEATVI_DIR = $(PORTS_DIR)/neatvi
 TESTS_DIR = tests
+USERLAND_DIR = userland
 LIBC_CONTRACT_SOURCE = $(TESTS_DIR)/libc_contract.c
 FS_CONTRACT_SOURCE = $(TESTS_DIR)/fs_contract.c
 TTY_CONTRACT_SOURCE = $(TESTS_DIR)/tty_contract.c
+GCC_STATIC_MAIN_SOURCE = $(TESTS_DIR)/gcc_static_main.c
+GCC_STATIC_LIB_SOURCE = $(TESTS_DIR)/gcc_static_lib.c
+GCC_STATIC_HEADER_SOURCE = $(TESTS_DIR)/gcc_static_lib.h
+CXX_CONTRACT_SOURCE = $(TESTS_DIR)/cxx_contract.cc
+CXX_STD_CONTRACT_SOURCE = $(TESTS_DIR)/cxx_std_contract.cc
+CXX_DYN_CONTRACT_SOURCE = $(TESTS_DIR)/cxx_dyn_contract.cc
+GXX_CONTRACT_SOURCE = $(TESTS_DIR)/gxx_contract.cc
+USERLAND_SOURCES = $(wildcard $(USERLAND_DIR)/*.c)
+BUILD_DESCRIPTION = Buildfile
 TCC_USER_CC ?= riscv64-linux-gnu-gcc
 TCC_USER_AR ?= riscv64-linux-gnu-ar
 PORT_USER_CC ?= $(TCC_USER_CC)
@@ -37,16 +48,51 @@ TCC_RUNTIME_CC ?= $(CC)
 TCC_RUNTIME_AR ?= $(CROSS)ar
 TCC_USER = $(BUILD_DIR)/tcc
 VI_USER = $(BUILD_DIR)/vi
+CXX_CONTRACT_USER = $(BUILD_DIR)/cxxtest
+CXX_STD_CONTRACT_USER = $(BUILD_DIR)/cxxstdtest
+CXX_DYN_CONTRACT_USER = $(BUILD_DIR)/cxxdyntest
+GXX_CONTRACT_USER = $(BUILD_DIR)/gxxtest
+GCC_CONTRACT_USER = $(BUILD_DIR)/gcctest
+GCC_STATIC_MAIN_OBJ = $(BUILD_DIR)/gcc_static_main.o
+GCC_STATIC_LIB_OBJ = $(BUILD_DIR)/gcc_static_lib.o
+GCC_STATIC_CONTRACT_USER = $(BUILD_DIR)/gccstatictest
+GCC_USERLAND_USERS = \
+    $(BUILD_DIR)/gcc-hello \
+    $(BUILD_DIR)/gcc-lines \
+    $(BUILD_DIR)/gcc-cat \
+    $(BUILD_DIR)/gcc-wc \
+    $(BUILD_DIR)/gcc-grep \
+    $(BUILD_DIR)/gcc-diff
 TCC_PREDEFS = $(TINYCC_DIR)/tccdefs_.h
 TCC_C2STR = $(BUILD_DIR)/c2str.exe
 TCC_RUNTIME = $(BUILD_DIR)/crt1.o $(BUILD_DIR)/crti.o $(BUILD_DIR)/crtn.o $(BUILD_DIR)/libc.a
 TCC_INCLUDE_DIR = $(TINYCC_DIR)/myos-include
 TCC_HEADERS = $(wildcard $(TCC_INCLUDE_DIR)/*.h) $(wildcard $(TCC_INCLUDE_DIR)/sys/*.h)
+CXX_INCLUDE_DIR = $(PORTS_DIR)/cxx/include
+CXX_HEADERS = $(wildcard $(CXX_INCLUDE_DIR)/*)
+CXX_RUNTIME_HEADERS = $(PORTS_DIR)/cxx/myos-cxx-sys.h
+CXX_CRT0 = $(BUILD_DIR)/cxx-crt0.o
+CXX_RUNTIME = $(BUILD_DIR)/libcxxrt.a
+MYOS_SYSROOT = $(BUILD_DIR)/sysroot
+MYOS_GCC = $(BUILD_DIR)/riscv64-myos-gcc
+CXX_SYSROOT = $(BUILD_DIR)/cxx-sysroot
+CXX_MYOS_GXX = $(BUILD_DIR)/riscv64-myos-g++
 UPROG_IMAGE_ARGS = $(foreach prog,$(UPROGS),$(prog)=/bin/$(notdir $(prog)))
 TCC_IMAGE_ARGS = $(TCC_USER)=/bin/tcc $(foreach file,$(TCC_RUNTIME),$(file)=/lib/$(notdir $(file)))
 TCC_HEADER_IMAGE_ARGS = $(foreach hdr,$(TCC_HEADERS),$(hdr)=/include/$(patsubst $(TCC_INCLUDE_DIR)/%,%,$(hdr)))
+CXX_HEADER_IMAGE_ARGS = $(foreach hdr,$(CXX_HEADERS),$(hdr)=/include/c++/$(patsubst $(CXX_INCLUDE_DIR)/%,%,$(hdr)))
 PORT_BINARY_IMAGE_ARGS = $(VI_USER)=/bin/vi
 TEST_SOURCE_IMAGE_ARGS = $(LIBC_CONTRACT_SOURCE)=/src/tests/libc_ct.c $(FS_CONTRACT_SOURCE)=/src/tests/fs_ct.c $(TTY_CONTRACT_SOURCE)=/src/tests/tty_ct.c
+GCC_CONTRACT_IMAGE_ARGS = $(GCC_CONTRACT_USER)=/bin/gcctest
+GCC_STATIC_CONTRACT_IMAGE_ARGS = $(GCC_STATIC_CONTRACT_USER)=/bin/gccstatictest $(GCC_STATIC_MAIN_SOURCE)=/src/tests/gccst_main.c $(GCC_STATIC_LIB_SOURCE)=/src/tests/gccst_lib.c $(GCC_STATIC_HEADER_SOURCE)=/src/tests/gccst_lib.h
+GCC_USERLAND_IMAGE_ARGS = $(foreach prog,$(GCC_USERLAND_USERS),$(prog)=/bin/$(notdir $(prog)))
+CXX_CONTRACT_IMAGE_ARGS = $(CXX_CONTRACT_USER)=/bin/cxxtest $(CXX_CONTRACT_SOURCE)=/src/tests/cxx_ct.cc
+CXX_STD_CONTRACT_IMAGE_ARGS = $(CXX_STD_CONTRACT_USER)=/bin/cxxstdtest $(CXX_STD_CONTRACT_SOURCE)=/src/tests/cxxstd_ct.cc
+CXX_DYN_CONTRACT_IMAGE_ARGS = $(CXX_DYN_CONTRACT_USER)=/bin/cxxdyntest $(CXX_DYN_CONTRACT_SOURCE)=/src/tests/cxxdyn_ct.cc
+GXX_CONTRACT_IMAGE_ARGS = $(GXX_CONTRACT_USER)=/bin/gxxtest $(GXX_CONTRACT_SOURCE)=/src/tests/gxx_ct.cc
+CXX_RUNTIME_IMAGE_ARGS = $(CXX_RUNTIME)=/lib/libcxxrt.a
+USERLAND_SOURCE_IMAGE_ARGS = $(foreach src,$(USERLAND_SOURCES),$(src)=/src/userland/$(notdir $(src)))
+BUILD_DESCRIPTION_IMAGE_ARGS = $(BUILD_DESCRIPTION)=/src/Buildfile
 TCC_RUNTIME_CFLAGS = -Os -nostdlib -fno-builtin -ffreestanding \
     -mno-relax -msmall-data-limit=0 -fno-pic -fno-pie \
     -mcmodel=medany -march=rv64gc -mabi=lp64d
@@ -69,6 +115,16 @@ PORT_USER_CFLAGS = -Os -static -nostdlib -fno-builtin -ffreestanding \
     -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-e,_start -Wl,-s \
     -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
     -I$(TCC_INCLUDE_DIR)
+CXX_CONTRACT_CXXFLAGS = -Os -nostdlib -nostartfiles -ffreestanding \
+    -std=c++20 \
+    -fno-exceptions -fno-rtti -fno-use-cxa-atexit \
+    -fno-stack-protector -fno-threadsafe-statics \
+    -mno-relax -msmall-data-limit=0 -fno-pic -fno-pie \
+    -mcmodel=medany -march=rv64gc -mabi=lp64d \
+    -I$(PORTS_DIR)/cxx \
+    -Wl,-e,_start -Wl,--gc-sections -Wl,-s
+CXX_STD_CONTRACT_CXXFLAGS = $(CXX_CONTRACT_CXXFLAGS) -nostdinc++ -I$(CXX_INCLUDE_DIR)
+CXX_RUNTIME_CXXFLAGS = $(CXX_STD_CONTRACT_CXXFLAGS) -c
 
 SRCS = \
     $K/boot/entry.S \
@@ -113,8 +169,10 @@ UPROGS = \
     $U/grep \
     $U/wc \
     $U/cp \
+    $U/install \
     $U/mv \
     $U/cmp \
+    $U/diff \
     $U/head \
     $U/tail \
     $U/hexdump \
@@ -176,9 +234,75 @@ $(BUILD_DIR)/libc.a: $(BUILD_DIR)/myos-libc.o | $(BUILD_DIR)
 $(VI_USER): $(NEATVI_DEPS) $(TINYCC_DIR)/myos-crt1.S $(TINYCC_DIR)/myos-libc.c $(TCC_HEADERS) | $(BUILD_DIR)
 	$(PORT_USER_CC) $(PORT_USER_CFLAGS) -I$(NEATVI_DIR) $(TINYCC_DIR)/myos-crt1.S $(NEATVI_SRCS) $(TINYCC_DIR)/myos-libc.c -o $@ -lgcc
 
-fs.img: mkfs $(UPROGS) $(TCC_USER) $(TCC_RUNTIME) $(TCC_HEADERS) $(LIBC_CONTRACT_SOURCE) $(FS_CONTRACT_SOURCE) $(TTY_CONTRACT_SOURCE) $(VI_USER)
+$(CXX_CRT0): $(PORTS_DIR)/cxx/myos-cxx-crt0.cc $(CXX_RUNTIME_HEADERS) | $(BUILD_DIR)
+	$(CXX) $(CXX_RUNTIME_CXXFLAGS) $< -o $@
+
+$(BUILD_DIR)/myos-cxx-runtime.o: $(PORTS_DIR)/cxx/myos-cxx-runtime.cc $(CXX_RUNTIME_HEADERS) | $(BUILD_DIR)
+	$(CXX) $(CXX_RUNTIME_CXXFLAGS) $< -o $@
+
+$(CXX_RUNTIME): $(BUILD_DIR)/myos-cxx-runtime.o | $(BUILD_DIR)
+	$(TCC_RUNTIME_AR) rcs $@ $<
+
+$(CXX_CONTRACT_USER): $(CXX_CONTRACT_SOURCE) $(CXX_CRT0) $(CXX_RUNTIME) $(TCC_RUNTIME) | $(BUILD_DIR)
+	$(CXX) $(CXX_CONTRACT_CXXFLAGS) $(CXX_CRT0) $< $(CXX_RUNTIME) $(BUILD_DIR)/libc.a -o $@
+
+$(CXX_STD_CONTRACT_USER): $(CXX_STD_CONTRACT_SOURCE) $(CXX_HEADERS) $(CXX_CRT0) $(CXX_RUNTIME) $(TCC_RUNTIME) | $(BUILD_DIR)
+	$(CXX) $(CXX_STD_CONTRACT_CXXFLAGS) $(CXX_CRT0) $< $(CXX_RUNTIME) $(BUILD_DIR)/libc.a -o $@
+
+$(CXX_DYN_CONTRACT_USER): $(CXX_DYN_CONTRACT_SOURCE) $(CXX_HEADERS) $(CXX_CRT0) $(CXX_RUNTIME) $(TCC_RUNTIME) | $(BUILD_DIR)
+	$(CXX) $(CXX_STD_CONTRACT_CXXFLAGS) $(CXX_CRT0) $< $(CXX_RUNTIME) $(BUILD_DIR)/libc.a -o $@
+
+gcc-sysroot: $(MYOS_SYSROOT)/.stamp $(MYOS_GCC)
+
+$(MYOS_SYSROOT)/.stamp: $(TCC_RUNTIME) $(TCC_HEADERS) | $(BUILD_DIR)
+	rm -rf $(MYOS_SYSROOT)
+	mkdir -p $(MYOS_SYSROOT)/include $(MYOS_SYSROOT)/lib
+	cp -R $(TCC_INCLUDE_DIR)/* $(MYOS_SYSROOT)/include/
+	cp $(TCC_RUNTIME) $(MYOS_SYSROOT)/lib/
+	touch $@
+
+$(MYOS_GCC): scripts/riscv64-myos-gcc.sh $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	cp $< $@
+	chmod +x $@
+
+$(GCC_CONTRACT_USER): $(LIBC_CONTRACT_SOURCE) $(MYOS_GCC) $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(MYOS_GCC) $< -o $@
+
+$(GCC_STATIC_MAIN_OBJ): $(GCC_STATIC_MAIN_SOURCE) $(GCC_STATIC_HEADER_SOURCE) $(MYOS_GCC) $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(MYOS_GCC) -c $< -o $@
+
+$(GCC_STATIC_LIB_OBJ): $(GCC_STATIC_LIB_SOURCE) $(GCC_STATIC_HEADER_SOURCE) $(MYOS_GCC) $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(MYOS_GCC) -c $< -o $@
+
+$(GCC_STATIC_CONTRACT_USER): $(GCC_STATIC_MAIN_OBJ) $(GCC_STATIC_LIB_OBJ) $(MYOS_GCC) $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(MYOS_GCC) $(GCC_STATIC_MAIN_OBJ) $(GCC_STATIC_LIB_OBJ) -o $@
+
+$(BUILD_DIR)/gcc-%: $(USERLAND_DIR)/%.c $(MYOS_GCC) $(MYOS_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(MYOS_GCC) $< -o $@
+
+cxx-sysroot: $(CXX_SYSROOT)/.stamp $(CXX_MYOS_GXX)
+
+$(CXX_SYSROOT)/.stamp: $(CXX_CRT0) $(CXX_RUNTIME) $(CXX_RUNTIME_HEADERS) $(CXX_HEADERS) $(TCC_HEADERS) | $(BUILD_DIR)
+	rm -rf $(CXX_SYSROOT)
+	mkdir -p $(CXX_SYSROOT)/include $(CXX_SYSROOT)/include/c++ $(CXX_SYSROOT)/lib
+	cp -R $(TCC_INCLUDE_DIR)/* $(CXX_SYSROOT)/include/
+	cp $(CXX_HEADERS) $(CXX_SYSROOT)/include/c++/
+	cp $(CXX_RUNTIME_HEADERS) $(CXX_SYSROOT)/include/myos-cxx-sys.h
+	cp $(CXX_CRT0) $(CXX_SYSROOT)/lib/cxx-crt0.o
+	cp $(CXX_RUNTIME) $(CXX_SYSROOT)/lib/libcxxrt.a
+	cp $(TCC_RUNTIME) $(CXX_SYSROOT)/lib/
+	touch $@
+
+$(CXX_MYOS_GXX): scripts/riscv64-myos-g++.sh $(CXX_SYSROOT)/.stamp | $(BUILD_DIR)
+	cp $< $@
+	chmod +x $@
+
+$(GXX_CONTRACT_USER): $(GXX_CONTRACT_SOURCE) $(CXX_MYOS_GXX) $(CXX_SYSROOT)/.stamp | $(BUILD_DIR)
+	$(CXX_MYOS_GXX) $< -o $@
+
+fs.img: mkfs $(UPROGS) $(TCC_USER) $(TCC_RUNTIME) $(TCC_HEADERS) $(GCC_CONTRACT_USER) $(GCC_STATIC_CONTRACT_USER) $(GCC_USERLAND_USERS) $(CXX_HEADERS) $(CXX_RUNTIME) $(LIBC_CONTRACT_SOURCE) $(FS_CONTRACT_SOURCE) $(TTY_CONTRACT_SOURCE) $(GCC_STATIC_MAIN_SOURCE) $(GCC_STATIC_LIB_SOURCE) $(GCC_STATIC_HEADER_SOURCE) $(CXX_CONTRACT_SOURCE) $(CXX_CONTRACT_USER) $(CXX_STD_CONTRACT_SOURCE) $(CXX_STD_CONTRACT_USER) $(CXX_DYN_CONTRACT_SOURCE) $(CXX_DYN_CONTRACT_USER) $(GXX_CONTRACT_SOURCE) $(GXX_CONTRACT_USER) $(USERLAND_SOURCES) $(BUILD_DESCRIPTION) $(VI_USER)
 	@echo "正在创建并格式化磁盘镜像 fs.img..."
-	./mkfs fs.img $(UPROG_IMAGE_ARGS) $(TCC_IMAGE_ARGS) $(TCC_HEADER_IMAGE_ARGS) $(PORT_BINARY_IMAGE_ARGS) $(TEST_SOURCE_IMAGE_ARGS)
+	./mkfs fs.img $(UPROG_IMAGE_ARGS) $(TCC_IMAGE_ARGS) $(TCC_HEADER_IMAGE_ARGS) $(GCC_CONTRACT_IMAGE_ARGS) $(GCC_STATIC_CONTRACT_IMAGE_ARGS) $(GCC_USERLAND_IMAGE_ARGS) $(CXX_HEADER_IMAGE_ARGS) $(CXX_RUNTIME_IMAGE_ARGS) $(PORT_BINARY_IMAGE_ARGS) $(TEST_SOURCE_IMAGE_ARGS) $(CXX_CONTRACT_IMAGE_ARGS) $(CXX_STD_CONTRACT_IMAGE_ARGS) $(CXX_DYN_CONTRACT_IMAGE_ARGS) $(GXX_CONTRACT_IMAGE_ARGS) $(USERLAND_SOURCE_IMAGE_ARGS) $(BUILD_DESCRIPTION_IMAGE_ARGS)
 
 
 $U/initcode.out: $U/initcode.c $U/initcode.ld
@@ -226,4 +350,4 @@ clean:
 	rm -rf $(BUILD_DIR)
 	rm -f $(KERNEL) tcc crt1.o crti.o crtn.o libc.a $(TCC_PREDEFS) *.o *.d $U/*.o $U/*.out $U/*.bin $U/*.d $(TINYCC_DIR)/myos-libc.o mkfs fs.img
 
-.PHONY: all run debug test-qemu clean
+.PHONY: all run debug test-qemu clean gcc-sysroot cxx-sysroot

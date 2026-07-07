@@ -13,20 +13,22 @@ typedef uint16_t ushort;
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
 #define DIRSIZ 14
+#define IPB (BSIZE / sizeof(struct dinode))
 
 #define T_DIR 1
 #define T_FILE 2
 #define T_DEVICE 3
 
 #define FS_SIZE 2000
-#define NINODES 200
+#define NINODES 400
 #define NLOG 30
 #define LOG_START 2
 #define INODE_START 32
-#define BMAP_START 45
+#define INODE_BLOCKS ((NINODES + IPB - 1) / IPB)
+#define BMAP_START (INODE_START + INODE_BLOCKS)
 #define ROOTINO 1
-#define ROOT_BLOCK 46
-#define FIRST_DATA_BLOCK 47
+#define ROOT_BLOCK (BMAP_START + 1)
+#define FIRST_DATA_BLOCK (ROOT_BLOCK + 1)
 
 #define MAX_IMAGE_PATH 128
 #define MAX_DIRS 32
@@ -222,6 +224,9 @@ static void init_standard_dirs(void)
 {
     ensure_dir("/bin");
     ensure_dir("/lib");
+    ensure_dir("/include");
+    ensure_dir("/src");
+    ensure_dir("/tmp");
 }
 
 static void parent_and_name(const char *path, char *parent, char *name)

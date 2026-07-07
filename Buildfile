@@ -1,0 +1,15 @@
+libc-contract cc /src/tests/libc_ct.c rt_libc contracts /src/tests/libc_ct.c
+fs-contract cc /src/tests/fs_ct.c rt_fs contracts /src/tests/fs_ct.c
+cat2 cc /src/userland/cat.c cat2 userland /src/userland/cat.c
+diff2 cc /src/userland/diff.c diff2 userland /src/userland/diff.c
+grep2 cc /src/userland/grep.c grep2 userland /src/userland/grep.c
+hello cc /src/userland/hello.c hello userland /src/userland/hello.c
+lines cc /src/userland/lines.c lines userland /src/userland/lines.c
+wc2 cc /src/userland/wc.c wc2 userland /src/userland/wc.c
+cat2-install copy cat2 /bin/cat2 install @cat2
+diff2-install copy diff2 /bin/diff2 install @diff2
+grep2-install copy grep2 /bin/grep2 install @grep2
+hello-install copy hello /bin/hello install @hello
+lines-install copy lines /bin/lines install @lines
+wc2-install copy wc2 /bin/wc2 install @wc2
+world phony - - world @libc-contract,@fs-contract,@cat2-install,@diff2-install,@grep2-install,@hello-install,@lines-install,@wc2-install

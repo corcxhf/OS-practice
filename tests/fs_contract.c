@@ -149,6 +149,62 @@ static void test_unlink_recreate(void)
 	expect_str("recreate-content", buf, "new");
 }
 
+static void test_rename_file(void)
+{
+	char buf[32];
+	int fd;
+
+	remove("fs_ren_a");
+	remove("fs_ren_b");
+	remove("fs_ren_c");
+	remove("fs_ren_d");
+	remove("fs_ren_e");
+	remove("fs_ren_f");
+	remove("/src/fsrenf");
+
+	if (write_file("fs_ren_a", "alpha") < 0)
+		return;
+	expect_int("rename-basic", rename("fs_ren_a", "fs_ren_b"), 0);
+	fd = open("fs_ren_a", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		fail("rename-removes-old-name");
+	}
+	expect_int("rename-basic-size", read_file("fs_ren_b", buf, sizeof(buf)), 5);
+	expect_str("rename-basic-content", buf, "alpha");
+
+	if (write_file("fs_ren_c", "old") < 0)
+		return;
+	if (write_file("fs_ren_d", "newer") < 0)
+		return;
+	expect_int("rename-overwrite", rename("fs_ren_c", "fs_ren_d"), 0);
+	fd = open("fs_ren_c", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		fail("rename-overwrite-removes-old");
+	}
+	expect_int("rename-overwrite-size", read_file("fs_ren_d", buf, sizeof(buf)), 3);
+	expect_str("rename-overwrite-content", buf, "old");
+
+	expect_int("rename-missing", rename("fs_ren_z", "fs_ren_e"), -1);
+	fd = open("fs_ren_e", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		fail("rename-missing-no-target");
+	}
+
+	if (write_file("fs_ren_f", "cross") < 0)
+		return;
+	expect_int("rename-cross-dir", rename("fs_ren_f", "/src/fsrenf"), 0);
+	fd = open("fs_ren_f", O_RDONLY);
+	if (fd >= 0) {
+		close(fd);
+		fail("rename-cross-removes-old");
+	}
+	expect_int("rename-cross-size", read_file("/src/fsrenf", buf, sizeof(buf)), 5);
+	expect_str("rename-cross-content", buf, "cross");
+}
+
 static void slot_name(char *name, int slot)
 {
 	name[0] = 'f';
@@ -258,6 +314,7 @@ int main(void)
 	test_create_read_stat();
 	test_open_trunc_releases_tail();
 	test_unlink_recreate();
+	test_rename_file();
 	test_dirent_reuse();
 	test_lseek_overwrite();
 	test_independent_open_offsets();

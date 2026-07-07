@@ -131,21 +131,39 @@ int main(void) {
 - `/bin/grep`
 - `/bin/wc`
 - `/bin/cp`
+- `/bin/install`
 - `/bin/mv`
 - `/bin/cmp`
+- `/bin/diff`
 - `/bin/head`
 - `/bin/tail`
 - `/bin/hexdump`
 - `/bin/runtests`
 - `/bin/build`
 - `/bin/sbrktest`
+- `/bin/cxxtest`
+- `/bin/cxxstdtest`
+- `/bin/cxxdyntest`
+- `/bin/gxxtest`
 - `/bin/vi`
 - `/bin/tcc`
 - `/lib/crt1.o`、`/lib/crti.o`、`/lib/crtn.o`、`/lib/libc.a`
 - `/include/...` MyOS 最小头文件集合
+- `/include/c++/...` MyOS freestanding C++ 头文件子集
+- `/src/Buildfile`
 - `/src/tests/libc_ct.c`
 - `/src/tests/fs_ct.c`
 - `/src/tests/tty_ct.c`
+- `/src/tests/cxx_ct.cc`
+- `/src/tests/cxxstd_ct.cc`
+- `/src/tests/cxxdyn_ct.cc`
+- `/src/tests/gxx_ct.cc`
+- `/src/userland/cat.c`
+- `/src/userland/diff.c`
+- `/src/userland/grep.c`
+- `/src/userland/hello.c`
+- `/src/userland/lines.c`
+- `/src/userland/wc.c`
 
 `/bin/edit` 和 `/bin/kilo` 已经从镜像里移除。现在编辑器入口统一是 `/bin/vi`。
 
@@ -209,6 +227,100 @@ shell 源码在 [user/initcode.c](user/initcode.c)。它目前是第一个用户
 
 长期目标是让更多用户态工具在 MyOS 内部被编译出来。
 
+## C++ contract
+
+当前已经有三条标准 C++ 能力探针。宿主机使用 `riscv64-unknown-elf-g++` 交叉编译 [tests/cxx_contract.cc](tests/cxx_contract.cc)，并把产物打包成 `/bin/cxxtest`，源码打包成 `/src/tests/cxx_ct.cc`。
+
+它不依赖 libstdc++，但使用真正的 C++ 前端，覆盖：
+
+- 全局构造函数和 `.init_array`
+- class / constructor / destructor
+- function template 和 `constexpr`
+- reference、overload
+- virtual dispatch
+- `new` / `delete`
+
+这一步证明的是 MyOS 可以运行 C++ ABI 基础程序。MyOS 内部的 C++ 编译器还没有引入；当前系统内编译仍由 `/bin/tcc` 支撑 C 程序。
+
+第二条探针是 [tests/cxx_std_contract.cc](tests/cxx_std_contract.cc)，产物是 `/bin/cxxstdtest`，源码打包成 `/src/tests/cxxstd_ct.cc`。它使用 MyOS 自带的 freestanding C++ 头文件子集 `/include/c++`，目前覆盖：
+
+- `std::array`
+- `std::pair` / `std::make_pair`
+- `std::sort`
+- `std::min` / `std::max`
+- `std::is_same_v` / `std::remove_reference_t`
+
+这不是完整 libstdc++，而是一组明确可审计、可逐步扩展的标准库子集头文件。
+
+第三条探针是 [tests/cxx_dyn_contract.cc](tests/cxx_dyn_contract.cc)，产物是 `/bin/cxxdyntest`，源码打包成 `/src/tests/cxxdyn_ct.cc`。它把 C++ 子集推进到动态内存容器：
+
+- `std::vector<T>`
+- `std::string`
+- 对象拷贝、移动、析构
+- `vector<string>` 与 `std::sort`
+- `std::nothrow` new/delete 与可复用 C++ heap
+
+当前 `vector` 和 `string` 是最小可用实现，用于推进 MyOS 的 C++ 运行能力，不等同于完整标准库实现。
+
+## GCC 适配目标
+
+当前语言工具链优先级已经调整为 **GCC C 前端先行，g++ 后置**。原因是 GCC C 能先暴露 MyOS 作为编译器宿主系统的真实缺口：文件系统容量、路径、临时文件、`stat/access/rename/getcwd`、进程模型、stdio 和内存管理。
+
+第一步已经有宿主侧 MyOS C sysroot 入口：
+
+```sh
+make gcc-sysroot
+build/riscv64-myos-gcc tests/libc_contract.c -o build/gcc-libc-contract
+```
+
+`build/riscv64-myos-gcc` 是一个薄 wrapper，使用宿主机 `riscv64-unknown-elf-gcc`，自动带上 MyOS 的 `crt1.o`、`crti.o`、`crtn.o`、`libc.a` 和 `/include`。这一步解决的是“宿主机 GCC 正式面向 MyOS target 出 C 程序”，不是“gcc 编译器本体已经能在 MyOS 内运行”。
+
+这个 wrapper 编译出的 C contract 已经打包为 `/bin/gcctest` 并纳入常规 QEMU smoke。当前也会用同一入口编译一组宿主 GCC 产出的 userland 工具，并打包为：
+
+- `/bin/gcc-hello`
+- `/bin/gcc-lines`
+- `/bin/gcc-cat`
+- `/bin/gcc-wc`
+- `/bin/gcc-grep`
+- `/bin/gcc-diff`
+
+它们覆盖了 printf、文件读取、stdin 管道、字符串处理和 basic line diff。后续目标是继续扩大到：
+
+- `riscv64-myos-gcc hello.c -o hello`
+- `riscv64-myos-gcc userland/*.c`
+- 在 MyOS 内运行 gcc C 前端本体
+- 在 MyOS 内完成 `gcc hello.c -o hello && ./hello`
+
+为 native GCC 做准备的 libc/FS 缺口会逐项进入 contract。当前已经补入 `rename(old, new)`，覆盖普通文件重命名、覆盖已有文件和跨目录重命名；这对应编译器常见的“先写临时文件，再 rename 成最终输出”的模式。
+
+## C++ 适配目标
+
+C++ 当前不作为 native 编译器移植的第一优先级。它的目标是先形成一条稳定、可测试、可逐步扩展的 freestanding C++ 路线，为后续 g++ 回归做准备：
+
+- MyOS 能运行由宿主机 `riscv64-unknown-elf-g++` 生成的 C++ ELF。
+- C++ ABI 基础可用：全局构造函数、虚函数、析构、`new/delete`。
+- `/include/c++` 提供小而明确的标准库子集，优先覆盖内核工具和用户态工具真正会用到的头文件。
+- C++ heap 能支撑 `vector`、`string` 这类动态容器反复构造和析构，而不是只靠一次性 `sbrk` 增长。
+- 每新增一个 C++ 能力，都要落到 `/bin/cxxtest`、`/bin/cxxstdtest`、`/bin/cxxdyntest` 或 `/bin/gxxtest` 这类 contract 里。
+
+当前也有宿主侧 MyOS C++ sysroot 入口：
+
+```sh
+make cxx-sysroot
+build/riscv64-myos-g++ tests/cxx_dyn_contract.cc -o build/cxxdyntest2
+```
+
+`build/riscv64-myos-g++` 是一个薄 wrapper，使用宿主机 `riscv64-unknown-elf-g++`，自动带上 MyOS 的 `crt0`、`libcxxrt.a`、`libc.a`、C libc headers 和 `/include/c++` 子集。这一步解决的是“宿主机 g++ 正式面向 MyOS target 出程序”，不是“g++ 编译器本体已经能在 MyOS 内运行”。
+
+当前新增的 [tests/gxx_contract.cc](tests/gxx_contract.cc) 会通过这个 wrapper 编译为 `/bin/gxxtest`，覆盖 C++ 标准库子集和 C libc 同时参与链接的情况：
+
+- 全局构造函数
+- `std::vector<std::string>`
+- `std::sort`
+- `<stdio.h>` / `<string.h>` 中的 `snprintf`、`strcmp`
+
+做到这些之后，MyOS 就具备了承接更大语言运行时的基础。下一条自然路线是尝试 Python：先不是完整 CPython，而是先找出解释器需要的系统调用、libc、文件 IO、内存分配和构建能力缺口，再用 contract 一项项补齐。
+
 ## 回归测试
 
 主要测试入口：
@@ -258,6 +370,11 @@ make test-qemu
   - 关闭和恢复 echo
   - Ctrl-C 打断阻塞输入
   - `vi` 退出后恢复主屏幕且不清屏
+- C++ / g++ contract：
+  - C++ ABI 基础程序
+  - freestanding `/include/c++` 子集
+  - `std::vector`、`std::string` 和 C++ heap
+  - g++ wrapper 输出的 MyOS ELF 能同时使用 C++ runtime 和 C libc
 
 修 bug 时，应该同步添加或更新 QEMU 回归测试。
 
@@ -320,12 +437,13 @@ make fs.img
 
 ## 下一步方向
 
-当前下一阶段是 **Toolsmith**：
+当前下一阶段是 **Forge + 语言运行时探索**：
 
-- 添加小型 Unix 工具，例如 `wc`、`cp`、`mv`。
-- 只在真实工具需要时继续补 libc。
-- 每增加一个工具，都配 contract test。
-- 为 MyOS 内部的小型构建工具做准备。
+- 继续扩大 MyOS 内部可构建的 userland 工具集合。
+- 继续收紧 C++ freestanding runtime 和 `/include/c++` 子集。
+- 评估 Python 移植路径，优先验证最小解释器运行所需的 libc、FS、TTY、进程和内存契约。
+- 每增加一个工具或语言运行时能力，都配 contract test。
+- 为 MyOS 内部的小型构建工具和后续包管理做准备。
 
 当前已经完成第一块工具箱砖：`/bin/grep`。它支持：
 
@@ -347,19 +465,35 @@ cat file | wc
 cp SRC DST
 ```
 
-第四块工具箱砖是 `/bin/mv`。它支持：
+第四块工具箱砖是 `/bin/install`。它支持：
+
+```sh
+install SRC DST
+```
+
+它目前是一个明确安装语义的文件复制工具，用于把构建产物放进 `/bin` 这类系统路径。
+
+第五块工具箱砖是 `/bin/mv`。它支持：
 
 ```sh
 mv SRC DST
 ```
 
-第五块工具箱砖是 `/bin/cmp`。它支持：
+第六块工具箱砖是 `/bin/cmp`。它支持：
 
 ```sh
 cmp FILE1 FILE2
 ```
 
-第六块工具箱砖是 `/bin/head` 和 `/bin/tail`。它们支持：
+第七块工具箱砖是 `/bin/diff`。它支持：
+
+```sh
+diff FILE1 FILE2
+```
+
+当前是 minimal line diff：相同文件静默返回 0，不同文件输出第一处不同的行并返回 1。
+
+第八块工具箱砖是 `/bin/head` 和 `/bin/tail`。它们支持：
 
 ```sh
 head [-n N] [FILE]
@@ -368,12 +502,28 @@ cat file | head -n 5
 cat file | tail -n 5
 ```
 
-第七块工具箱砖是 `/bin/hexdump`。它支持：
+第九块工具箱砖是 `/bin/hexdump`。它支持：
 
 ```sh
 hexdump [FILE]
 cat file | hexdump
 ```
+
+`/src/userland/cat.c`、`/src/userland/diff.c`、`/src/userland/wc.c` 和 `/src/userland/grep.c` 是第一批由 MyOS 内部工具链重建已有基础工具的源码。运行：
+
+```sh
+build userland
+build install
+/bin/cat2 file.txt
+cat file.txt | /bin/cat2
+/bin/diff2 left.txt right.txt
+/bin/wc2 file.txt
+cat file.txt | /bin/wc2
+/bin/grep2 PATTERN file.txt
+cat file.txt | /bin/grep2 PATTERN
+```
+
+可以得到通过 MyOS 内部 `tcc` 构建并安装的 `cat2`、`diff2`、`wc2` 和 `grep2`。
 
 第一版 MyOS 内部 test runner 是 `/bin/runtests`。它会在系统内创建临时文件，运行一组轻量工具测试，收集退出状态和输出文件，并汇总：
 
@@ -381,6 +531,7 @@ cat file | hexdump
 runtests
 runtests tools
 runtests contracts
+runtests world
 runtests list
 runtests help
 runtests wc
@@ -394,15 +545,24 @@ runtests wc
 - `head`
 - `tail`
 - `hexdump`
+- `diff`
 - `mv`
 - 编译并运行 `/src/tests/libc_ct.c`
 - 编译并运行 `/src/tests/fs_ct.c`
+- `build world` 后验证 self-built `/bin/cat2`、`/bin/diff2`、`/bin/wc2`、`/bin/grep2`、`/bin/lines`、`/bin/hello`
 
 `tty_ct.c` 仍由宿主机 QEMU smoke script 驱动，因为它需要交互输入、Ctrl-C 和终端模式检查。
 
-`runtests` 不带参数等同于 `runtests all`。也可以运行 `runtests tools`、`runtests contracts`，或指定单项测试名，例如 `runtests wc`。`runtests list` 会列出当前所有测试名，`runtests help` 会输出用法。
+`runtests` 不带参数等同于 `runtests all`。默认 `all` 保持轻量，会运行 tools 和 contracts；`world` 需要显式运行：
 
-第一版构建工具是 `/bin/build`。它负责把已知目标编译出来，当前支持：
+```sh
+build world
+runtests world
+```
+
+也可以运行 `runtests tools`、`runtests contracts`，或指定单项测试名，例如 `runtests wc`。`runtests list` 会列出当前所有测试名，`runtests help` 会输出用法。
+
+第一版构建工具是 `/bin/build`。它从 `/src/Buildfile` 读取构建目标，当前支持：
 
 ```sh
 build list
@@ -410,8 +570,63 @@ build help
 build libc-contract
 build fs-contract
 build contracts
+build userland
+build install
+build world
+```
+
+`/src/Buildfile` 目前使用六列格式：
+
+```text
+TARGET RECIPE SOURCE OUTPUT GROUP DEPS
+```
+
+当前支持的 `RECIPE` 有三个：
+
+- `cc`：等价于运行 `/bin/tcc SOURCE -o OUTPUT`
+- `copy`：把 `SOURCE` 复制到 `OUTPUT`
+- `phony`：不产生文件，只用于聚合依赖目标
+
+`DEPS` 是逗号分隔的依赖列表。普通项表示文件路径，`@TARGET` 表示另一个构建目标；例如 `@wc2` 会在当前目标执行前先构建 `wc2`。输出文件已经存在且非空时，`build` 会跳过该目标。旧的五列格式仍可读取，并会把 `SOURCE` 当作默认依赖。
+
+例如：
+
+```text
+libc-contract cc /src/tests/libc_ct.c rt_libc contracts /src/tests/libc_ct.c
+fs-contract cc /src/tests/fs_ct.c rt_fs contracts /src/tests/fs_ct.c
+cat2 cc /src/userland/cat.c cat2 userland /src/userland/cat.c
+diff2 cc /src/userland/diff.c diff2 userland /src/userland/diff.c
+grep2 cc /src/userland/grep.c grep2 userland /src/userland/grep.c
+hello cc /src/userland/hello.c hello userland /src/userland/hello.c
+lines cc /src/userland/lines.c lines userland /src/userland/lines.c
+wc2 cc /src/userland/wc.c wc2 userland /src/userland/wc.c
+cat2-install copy cat2 /bin/cat2 install @cat2
+diff2-install copy diff2 /bin/diff2 install @diff2
+grep2-install copy grep2 /bin/grep2 install @grep2
+hello-install copy hello /bin/hello install @hello
+lines-install copy lines /bin/lines install @lines
+wc2-install copy wc2 /bin/wc2 install @wc2
+world phony - - world @libc-contract,@fs-contract,@cat2-install,@diff2-install,@grep2-install,@hello-install,@lines-install,@wc2-install
 ```
 
 `runtests contracts` 会通过 `build` 编译 contract，再运行并判定结果。这样 `build` 负责构建，`runtests` 负责测试判定。
 
-下一步可以把 `build` 从固定目标推进到读取一个简单 build 描述文件；或者继续整理 `runtests` 的内部结构，让工具测试和 contract 测试更容易扩展。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。
+`build userland && build install` 会在 MyOS 内部编译 `/src/userland/cat.c`、`/src/userland/diff.c`、`/src/userland/grep.c`、`/src/userland/hello.c`、`/src/userland/lines.c` 和 `/src/userland/wc.c`，再安装为 `/bin/cat2`、`/bin/diff2`、`/bin/grep2`、`/bin/hello`、`/bin/lines` 和 `/bin/wc2`。由于 install 目标使用 `@TARGET` 依赖，直接运行 `build install` 也会自动先构建缺失的本地产物。`lines` 是一个简化的行计数工具，支持文件和 stdin：
+
+`build world` 是当前的整体构建入口，会编译 contract、构建 self-built userland，并安装这些工具。
+
+```sh
+/bin/lines file.txt
+cat file.txt | /bin/lines
+```
+
+这是一条最小但可用的 userland build/install 闭环。
+
+也可以直接使用 `/bin/install` 安装某个构建产物：
+
+```sh
+install lines /bin/lines2
+/bin/lines2 file.txt
+```
+
+下一步可以把更多用户态工具源码放进 `/src/userland`，或给 `Buildfile` 增加多命令 recipe、时间戳判断。当这些工作流在 MyOS 内部变得自然时，系统就可以开始走向第一轮用户态自举构建循环。

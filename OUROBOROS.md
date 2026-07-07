@@ -97,10 +97,10 @@ Immediate checklist:
 
 - [x] Add QEMU smoke test runner.
 - [x] Cover basic shell, `vi`, and `tcc + scanf`.
-- [ ] Add a libc contract program compiled inside MyOS.
-- [ ] Add filesystem truncate/unlink/recreate stress tests.
-- [ ] Add shell pipeline and redirection edge cases.
-- [ ] Add TTY mode-switch and control-key tests.
+- [x] Add a libc contract program compiled inside MyOS.
+- [x] Add filesystem truncate/unlink/recreate stress tests.
+- [x] Add shell pipeline and redirection edge cases.
+- [x] Add TTY mode-switch and control-key tests.
 
 ## Stage 1: Workbench
 
@@ -164,7 +164,7 @@ Target tools:
 - `head`
 - `tail`
 - `cmp`
-- `diff` minimal version
+- `diff` minimal version (present as `/bin/diff`)
 - `date` or simple clock display if time exists
 - `hexdump`
 
@@ -199,18 +199,26 @@ them into a runnable filesystem image or install tree.
 Work items:
 
 - Create an in-MyOS build description format.
+  - first version: `/src/Buildfile` with `TARGET RECIPE SOURCE OUTPUT GROUP DEPS`
 - Implement a small `make`-like tool:
   - targets
-  - dependencies
+  - dependencies (`@target` dependencies are built before the current target)
+  - recipes (`cc` and `copy`)
+  - aggregate targets (`phony`)
+  - first build/install loop: `build userland && build install` installs `/bin/hello`, `/bin/lines`, and self-built `/bin/cat2`, `/bin/diff2`, `/bin/wc2`, `/bin/grep2`
+  - first world entry point: `build world`
+  - first self-check entry point: `runtests world`
   - commands
   - timestamp or content checks
 - Teach the filesystem to handle more source files and build artifacts.
+  - first cut: mkfs now provisions a larger inode table for source/build/install churn.
 - Add install paths:
   - `/bin`
   - `/lib`
   - `/include`
   - `/src`
   - `/tmp`
+  - first install tool: `/bin/install SRC DST`
 - Add a package or archive format.
 
 Acceptance:

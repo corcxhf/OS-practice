@@ -133,8 +133,7 @@ uint64 sys_open(void)
     /* 到此为止，ip 已锁定且是目标文件的有效引用 */
     if ((flags & O_TRUNC) && ip->type == T_FILE && (flags & (O_WRONLY | O_RDWR)))
     {
-        ip->size = 0;
-        iupdate(ip);
+        itrunc(ip);
     }
 
     /* 5. 分配 file 对象 */

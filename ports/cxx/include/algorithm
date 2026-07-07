@@ -1,0 +1,67 @@
+#ifndef MYOS_CXX_ALGORITHM
+#define MYOS_CXX_ALGORITHM
+
+#include <utility>
+
+namespace std
+{
+template <class T>
+struct less
+{
+    constexpr bool operator()(const T &left, const T &right) const
+    {
+        return left < right;
+    }
+};
+
+template <class RandomIt, class Compare>
+constexpr void sort(RandomIt first, RandomIt last, Compare comp)
+{
+    for (RandomIt it = first + 1; it < last; ++it)
+    {
+        auto value = std::move(*it);
+        RandomIt pos = it;
+
+        while (pos > first && comp(value, *(pos - 1)))
+        {
+            *pos = std::move(*(pos - 1));
+            --pos;
+        }
+        *pos = std::move(value);
+    }
+}
+
+template <class RandomIt>
+constexpr void sort(RandomIt first, RandomIt last)
+{
+    sort(first, last, [](const auto &left, const auto &right) {
+        return left < right;
+    });
+}
+
+template <class T, class Compare>
+constexpr const T &min(const T &left, const T &right, Compare comp)
+{
+    return comp(right, left) ? right : left;
+}
+
+template <class T>
+constexpr const T &min(const T &left, const T &right)
+{
+    return right < left ? right : left;
+}
+
+template <class T, class Compare>
+constexpr const T &max(const T &left, const T &right, Compare comp)
+{
+    return comp(left, right) ? right : left;
+}
+
+template <class T>
+constexpr const T &max(const T &left, const T &right)
+{
+    return left < right ? right : left;
+}
+}
+
+#endif

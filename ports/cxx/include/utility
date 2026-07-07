@@ -1,0 +1,62 @@
+#ifndef MYOS_CXX_UTILITY
+#define MYOS_CXX_UTILITY
+
+#include <type_traits>
+
+namespace std
+{
+template <class T>
+constexpr remove_reference_t<T> &&move(T &&value) noexcept
+{
+    return static_cast<remove_reference_t<T> &&>(value);
+}
+
+template <class T>
+constexpr T &&forward(remove_reference_t<T> &value) noexcept
+{
+    return static_cast<T &&>(value);
+}
+
+template <class T>
+constexpr T &&forward(remove_reference_t<T> &&value) noexcept
+{
+    return static_cast<T &&>(value);
+}
+
+template <class T>
+constexpr void swap(T &left, T &right)
+{
+    T tmp = std::move(left);
+    left = std::move(right);
+    right = std::move(tmp);
+}
+
+template <class T1, class T2>
+struct pair
+{
+    T1 first;
+    T2 second;
+
+    constexpr pair() : first(), second()
+    {
+    }
+
+    constexpr pair(const T1 &left, const T2 &right) : first(left), second(right)
+    {
+    }
+
+    template <class U1, class U2>
+    constexpr pair(U1 &&left, U2 &&right)
+        : first(std::forward<U1>(left)), second(std::forward<U2>(right))
+    {
+    }
+};
+
+template <class T1, class T2>
+constexpr pair<T1, T2> make_pair(T1 first, T2 second)
+{
+    return pair<T1, T2>(std::move(first), std::move(second));
+}
+}
+
+#endif

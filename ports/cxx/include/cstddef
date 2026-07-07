@@ -1,0 +1,11 @@
+#ifndef MYOS_CXX_CSTDDEF
+#define MYOS_CXX_CSTDDEF
+
+namespace std
+{
+using size_t = decltype(sizeof(0));
+using ptrdiff_t = decltype((char *)0 - (char *)0);
+using nullptr_t = decltype(nullptr);
+}
+
+#endif

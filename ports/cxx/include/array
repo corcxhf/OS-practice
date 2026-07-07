@@ -1,0 +1,82 @@
+#ifndef MYOS_CXX_ARRAY
+#define MYOS_CXX_ARRAY
+
+#include <cstddef>
+
+namespace std
+{
+template <class T, size_t N>
+struct array
+{
+    T elems[N == 0 ? 1 : N];
+
+    using value_type = T;
+    using size_type = size_t;
+    using reference = value_type &;
+    using const_reference = const value_type &;
+    using iterator = value_type *;
+    using const_iterator = const value_type *;
+
+    constexpr reference operator[](size_type index)
+    {
+        return elems[index];
+    }
+
+    constexpr const_reference operator[](size_type index) const
+    {
+        return elems[index];
+    }
+
+    constexpr iterator begin() noexcept
+    {
+        return elems;
+    }
+
+    constexpr const_iterator begin() const noexcept
+    {
+        return elems;
+    }
+
+    constexpr iterator end() noexcept
+    {
+        return elems + N;
+    }
+
+    constexpr const_iterator end() const noexcept
+    {
+        return elems + N;
+    }
+
+    constexpr size_type size() const noexcept
+    {
+        return N;
+    }
+
+    constexpr bool empty() const noexcept
+    {
+        return N == 0;
+    }
+
+    constexpr reference front()
+    {
+        return elems[0];
+    }
+
+    constexpr const_reference front() const
+    {
+        return elems[0];
+    }
+
+    constexpr reference back()
+    {
+        return elems[N - 1];
+    }
+
+    constexpr const_reference back() const
+    {
+        return elems[N - 1];
+    }
+};
+}
+
+#endif
