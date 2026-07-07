@@ -21,6 +21,8 @@ static char input_buf[LINE_SIZE];
 static char token_buf[TOKEN_BUF_SIZE];
 static char cwd_path[LINE_SIZE] = "/";
 static char path_value[PATH_SIZE] = DEFAULT_PATH;
+static char env_path[PATH_SIZE + 5] = "PATH=" DEFAULT_PATH;
+static char *shell_env[] = {env_path, 0};
 static char status_arg[16] = "0";
 static int last_status = 0;
 
@@ -136,6 +138,8 @@ static void set_path_value(const char *value)
     }
     next[n] = '\0';
     copy_str(path_value, PATH_SIZE, next);
+    copy_str(env_path, sizeof(env_path), "PATH=");
+    copy_str(env_path + 5, sizeof(env_path) - 5, path_value);
 }
 
 static void print_path(void)
@@ -473,7 +477,7 @@ static void exec_from_path(char **argv)
         {
             int len = i - start;
             if (build_path(path, sizeof(path), &path_value[start], len, argv[0]))
-                syscall(SYS_exec, (uint64)path, (uint64)argv, 0);
+                syscall(SYS_exec, (uint64)path, (uint64)argv, (uint64)shell_env);
             if (path_value[i] == '\0')
                 break;
             start = i + 1;
@@ -487,7 +491,7 @@ static void exec_command(char **argv)
         syscall(SYS_exit, -1, 0, 0);
 
     if (has_slash(argv[0]))
-        syscall(SYS_exec, (uint64)argv[0], (uint64)argv, 0);
+        syscall(SYS_exec, (uint64)argv[0], (uint64)argv, (uint64)shell_env);
     else
         exec_from_path(argv);
 

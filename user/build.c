@@ -656,7 +656,7 @@ static int copy_file(const char *src, const char *dst)
 
 static int run_recipe(struct target *targets, int count, const struct target *target)
 {
-    char *argv[] = {"/bin/tcc", target->source, "-o", target->output, 0};
+    char *argv[] = {"/bin/cc", target->source, "-o", target->output, 0};
     char sig_path[32];
     uint64 sig;
     int status;

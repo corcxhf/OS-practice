@@ -7,6 +7,8 @@ using myos_uint64 = unsigned long;
 #define MYOS_SYS_sbrk 12
 #define MYOS_SYS_write 16
 
+extern "C" void __myos_init_environ(char **envp);
+
 static inline myos_uint64 myos_syscall3(myos_uint64 n, myos_uint64 a0, myos_uint64 a1, myos_uint64 a2)
 {
     register myos_uint64 a0_asm __asm__("a0") = a0;

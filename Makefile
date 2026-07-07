@@ -178,6 +178,10 @@ UPROGS = \
     $U/mv \
     $U/cmp \
     $U/diff \
+    $U/cc \
+    $U/gcc \
+    $U/as \
+    $U/ld \
     $U/head \
     $U/tail \
     $U/hexdump \

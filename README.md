@@ -27,6 +27,8 @@ MyOS 目前处在 **Spark -> Workbench** 之间：
 - `/bin/vi` 是当前主编辑器。
 - MyOS 内置 `tcc`，可以在系统内编译简单 C 程序。
 - 镜像里带有一套很小的 libc 和运行时对象。
+- `exec` / libc 现在会传递最小环境变量，shell 会把 `PATH` 交给子进程。
+- 镜像里有实验性的 `/bin/cc`、`/bin/gcc`、`/bin/as` 和 `/bin/ld` 工具链入口，目前由 `tcc` 后端支撑。
 - `make test-qemu` 可以自动启动 QEMU 跑回归测试。
 
 它还不是完整 POSIX 系统。现在更准确地说，它是一个正在长大的实验性 OS，并且我们在逐步把每个关键行为变成可测试契约。
@@ -99,8 +101,10 @@ echo $?
 
 ```sh
 vi hello.c
-tcc hello.c -o hello
+cc hello.c -o hello
+gcc hello.c -o hello2
 ./hello
+./hello2
 echo $?
 ```
 
@@ -147,6 +151,10 @@ int main(void) {
 - `/bin/gxxtest`
 - `/bin/vi`
 - `/bin/tcc`
+- `/bin/cc`
+- `/bin/gcc`
+- `/bin/as`
+- `/bin/ld`
 - `/lib/crt1.o`、`/lib/crti.o`、`/lib/crtn.o`、`/lib/libc.a`
 - `/include/...` MyOS 最小头文件集合
 - `/include/c++/...` MyOS freestanding C++ 头文件子集
@@ -212,12 +220,20 @@ shell 源码在 [user/initcode.c](user/initcode.c)。它目前是第一个用户
 
 ```text
 /bin/tcc
+/bin/cc
+/bin/gcc
+/bin/as
+/bin/ld
 /lib/crt1.o
 /lib/crti.o
 /lib/crtn.o
 /lib/libc.a
 /include
 ```
+
+`cc` 是当前系统 C 编译器入口，`gcc` 是给真正 GCC driver 预留的兼容入口；它们现在会转到 `/bin/tcc`。`gcc -print-prog-name=as` 和 `gcc -print-prog-name=ld` 会返回 `/bin/as`、`/bin/ld`，这给后续把真实 GCC driver 接进 MyOS 留出稳定位置。
+
+`as` 和 `ld` 现在还不是真正的 GNU binutils；它们是给下一步 GCC driver 对接用的最小工具入口，先能在 MyOS 里完成“汇编源 -> 对象文件 -> 链接可执行文件”的闭环。
 
 近期工具链目标是让 MyOS 内部能顺畅完成：
 
@@ -587,7 +603,7 @@ TARGET RECIPE SOURCE OUTPUT GROUP DEPS
 
 当前支持的 `RECIPE` 有三个：
 
-- `cc`：等价于运行 `/bin/tcc SOURCE -o OUTPUT`
+- `cc`：等价于运行 `/bin/cc SOURCE -o OUTPUT`
 - `copy`：把 `SOURCE` 复制到 `OUTPUT`
 - `phony`：不产生文件，只用于聚合依赖目标
 

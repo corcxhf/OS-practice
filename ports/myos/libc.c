@@ -50,6 +50,7 @@ typedef unsigned int uint;
 #define ICANON 0000002
 #define ISIG 0000001
 #define SIGWINCH 28
+#define ENV_MAX 32
 
 typedef struct FILE
 {
@@ -110,7 +111,26 @@ void *malloc(size_t nbytes);
 void *realloc(void *ptr, size_t nbytes);
 long strtol(const char *nptr, char **endptr, int base);
 void *memset(void *dst, int c, size_t n);
+char *strchr(const char *s, int c);
+char *strcpy(char *dst, const char *src);
+int strncmp(const char *a, const char *b, size_t n);
+size_t strlen(const char *s);
 static char *copy_cstr(char *dst, size_t cap, const char *src);
+
+static char *env_store[ENV_MAX];
+char **environ = env_store;
+
+void __myos_init_environ(char **envp)
+{
+    int i = 0;
+
+    while (envp && envp[i] && i < ENV_MAX - 1)
+    {
+        env_store[i] = envp[i];
+        i++;
+    }
+    env_store[i] = NULL;
+}
 
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
 {
@@ -328,7 +348,7 @@ int kill(int pid, int sig)
 
 int execvp(const char *file, char *const argv[])
 {
-    return (int)syscall(SYS_exec, (uint64)file, (uint64)argv, 0);
+    return (int)syscall(SYS_exec, (uint64)file, (uint64)argv, (uint64)environ);
 }
 
 int execv(const char *path, char *const argv[])
@@ -338,8 +358,7 @@ int execv(const char *path, char *const argv[])
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
-    (void)envp;
-    return execvp(path, argv);
+    return (int)syscall(SYS_exec, (uint64)path, (uint64)argv, (uint64)(envp ? envp : environ));
 }
 
 int openat(int dirfd, const char *pathname, int flags, ...)
@@ -1441,28 +1460,136 @@ int atoi(const char *s)
 
 char *getenv(const char *name)
 {
-    (void)name;
+    size_t name_len;
+
+    if (!name || name[0] == '\0' || strchr(name, '='))
+        return NULL;
+    name_len = strlen(name);
+    for (int i = 0; environ[i]; i++)
+    {
+        if (strncmp(environ[i], name, name_len) == 0 && environ[i][name_len] == '=')
+            return environ[i] + name_len + 1;
+    }
     return NULL;
 }
 
 int setenv(const char *name, const char *value, int overwrite)
 {
-    (void)name;
-    (void)value;
-    (void)overwrite;
-    return 0;
+    size_t name_len;
+    size_t value_len;
+    char *entry;
+
+    if (!name || name[0] == '\0' || strchr(name, '='))
+    {
+        errno_value = 22;
+        return -1;
+    }
+    if (!value)
+        value = "";
+
+    name_len = strlen(name);
+    for (int i = 0; environ[i]; i++)
+    {
+        if (strncmp(environ[i], name, name_len) == 0 && environ[i][name_len] == '=')
+        {
+            if (!overwrite)
+                return 0;
+            value_len = strlen(value);
+            entry = malloc(name_len + value_len + 2);
+            if (!entry)
+            {
+                errno_value = 12;
+                return -1;
+            }
+            strcpy(entry, name);
+            entry[name_len] = '=';
+            strcpy(entry + name_len + 1, value);
+            environ[i] = entry;
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < ENV_MAX - 1; i++)
+    {
+        if (!environ[i])
+        {
+            value_len = strlen(value);
+            entry = malloc(name_len + value_len + 2);
+            if (!entry)
+            {
+                errno_value = 12;
+                return -1;
+            }
+            strcpy(entry, name);
+            entry[name_len] = '=';
+            strcpy(entry + name_len + 1, value);
+            environ[i] = entry;
+            environ[i + 1] = NULL;
+            return 0;
+        }
+    }
+
+    errno_value = 12;
+    return -1;
 }
 
 int unsetenv(const char *name)
 {
-    (void)name;
+    size_t name_len;
+
+    if (!name || name[0] == '\0' || strchr(name, '='))
+    {
+        errno_value = 22;
+        return -1;
+    }
+
+    name_len = strlen(name);
+    for (int i = 0; environ[i];)
+    {
+        if (strncmp(environ[i], name, name_len) == 0 && environ[i][name_len] == '=')
+        {
+            for (int j = i; environ[j]; j++)
+                environ[j] = environ[j + 1];
+            continue;
+        }
+        i++;
+    }
     return 0;
 }
 
 int putenv(char *string)
 {
-    (void)string;
-    return 0;
+    char *eq;
+    size_t name_len;
+
+    if (!string || !(eq = strchr(string, '=')) || eq == string)
+    {
+        errno_value = 22;
+        return -1;
+    }
+    name_len = eq - string;
+
+    for (int i = 0; environ[i]; i++)
+    {
+        if (strncmp(environ[i], string, name_len) == 0 && environ[i][name_len] == '=')
+        {
+            environ[i] = string;
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < ENV_MAX - 1; i++)
+    {
+        if (!environ[i])
+        {
+            environ[i] = string;
+            environ[i + 1] = NULL;
+            return 0;
+        }
+    }
+
+    errno_value = 12;
+    return -1;
 }
 
 char *realpath(const char *path, char *resolved_path)
@@ -1673,8 +1800,6 @@ char *strerror(int errnum)
         return "Not a tty";
     return "error";
 }
-
-char *environ[] = {NULL};
 
 DIR *opendir(const char *name)
 {

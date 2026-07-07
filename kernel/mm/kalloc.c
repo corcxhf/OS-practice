@@ -43,7 +43,7 @@ void kinit(void)
 {
 
   char *p;
-  for (p = (char *)PGROUNDDOWN((uint64)end_address); p + PGSIZE <= (char *)PHYSTOP; p += PGSIZE)
+  for (p = (char *)PGROUNDUP((uint64)end_address); p + PGSIZE <= (char *)PHYSTOP; p += PGSIZE)
     kfree(p);
 
   /* ================================================================

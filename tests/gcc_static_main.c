@@ -288,6 +288,7 @@ static void test_posix_host_helpers(void)
     char real_buf[64];
     char tmp_buf[32];
     int values[] = {5, 1, 4, 2, 3};
+    char *path_env;
     int saw_dot = 0;
     int saw_dotdot = 0;
     int saw_file = 0;
@@ -376,7 +377,14 @@ static void test_posix_host_helpers(void)
     expect_int("chmod", chmod("/tmp", 0777), 0);
     expect_int("umask", umask(022), 0);
     expect_int("setenv", setenv("MYOS_GCC", "1", 1), 0);
+    expect_str("getenv-set", getenv("MYOS_GCC"), "1");
+    expect_int("setenv-no-overwrite", setenv("MYOS_GCC", "2", 0), 0);
+    expect_str("getenv-no-overwrite", getenv("MYOS_GCC"), "1");
     expect_int("unsetenv", unsetenv("MYOS_GCC"), 0);
+    expect_int("getenv-unset", getenv("MYOS_GCC") == NULL, 1);
+    path_env = getenv("PATH");
+    if (!path_env || !strstr(path_env, "/bin"))
+        fail("getenv-path");
 }
 
 static void test_exec_redirect(void)

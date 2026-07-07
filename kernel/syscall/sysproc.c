@@ -461,8 +461,10 @@ uint64 sys_exec(void)
 {
   char path[128];
   uint64 argv[MAXARG];
+  uint64 env[MAXARG];
   int argc;
-  uint64 uargv, uarg;
+  int envc;
+  uint64 uargv, uenvp, uarg;
   struct elfhdr elf;
   struct inode *ip;
   struct proghdr ph;
@@ -476,7 +478,10 @@ uint64 sys_exec(void)
     return -1;
   if (argaddr(1, &uargv) < 0)
     return -1;
+  if (argaddr(2, &uenvp) < 0)
+    return -1;
   memset(argv, 0, sizeof(argv));
+  memset(env, 0, sizeof(env));
   for (argc = 0; argc < MAXARG; argc++)
   {
     if (fetchaddr(uargv + sizeof(uint64) * argc, &uarg) < 0)
@@ -490,6 +495,18 @@ uint64 sys_exec(void)
     if (argv[argc] == 0)
       goto bad;
     if (fetchstr(uarg, (char *)argv[argc], PGSIZE) < 0)
+      goto bad;
+  }
+  for (envc = 0; uenvp != 0 && envc < MAXARG; envc++)
+  {
+    if (fetchaddr(uenvp + sizeof(uint64) * envc, &uarg) < 0)
+      goto bad;
+    if (uarg == 0)
+      break;
+    env[envc] = (uint64)kalloc();
+    if (env[envc] == 0)
+      goto bad;
+    if (fetchstr(uarg, (char *)env[envc], PGSIZE) < 0)
       goto bad;
   }
 
@@ -652,6 +669,8 @@ uint64 sys_exec(void)
   // 6. 压栈环节：把暂存在内核的 argv 参数字符串推进新用户栈
   // =========================================================
   uint64 ustack[MAXARG + 1];
+  uint64 envstack[MAXARG + 1];
+  uint64 argv_user, envp_user;
   for (int i = 0; i < argc; i++)
   {
     uint64 len = strlen((char *)argv[i]) + 1;
@@ -666,6 +685,29 @@ uint64 sys_exec(void)
     ustack[i] = sp; // 记录该参数在用户态的虚拟地址
   }
   ustack[argc] = 0; // argv[argc] = NULL
+  for (int i = 0; i < envc; i++)
+  {
+    uint64 len = strlen((char *)env[i]) + 1;
+    sp -= len;
+    sp -= sp % 16;
+    if (sp < stackbase)
+      goto bad;
+
+    if (copyout(new_pagetable, sp, (char *)env[i], len) < 0)
+      goto bad;
+
+    envstack[i] = sp;
+  }
+  envstack[envc] = 0;
+
+  sp -= (envc + 1) * sizeof(uint64);
+  sp -= sp % 16;
+  if (sp < stackbase)
+    goto bad;
+
+  if (copyout(new_pagetable, sp, (char *)envstack, (envc + 1) * sizeof(uint64)) < 0)
+    goto bad;
+  envp_user = sp;
 
   // 把 ustack 数组（即各个参数的指针）也推入用户栈
   sp -= (argc + 1) * sizeof(uint64);
@@ -675,6 +717,7 @@ uint64 sys_exec(void)
 
   if (copyout(new_pagetable, sp, (char *)ustack, (argc + 1) * sizeof(uint64)) < 0)
     goto bad;
+  argv_user = sp;
   // =========================================================
   // 7. 终极一换：新旧交替，换表仪式
   // =========================================================
@@ -691,13 +734,16 @@ uint64 sys_exec(void)
   p->trapframe->ra = exitstub;   // 如果裸 _start 返回，自动转入 exit(0)
   p->trapframe->sp = sp;         // 刚刚布局好的用户栈顶虚拟地址
   p->trapframe->a0 = argc;       // 根据 RISC-V C ABI，a0 寄存器存放 argc
-  p->trapframe->a1 = sp;         // 根据 RISC-V C ABI，a1 寄存器存放 argv 指针
+  p->trapframe->a1 = argv_user;  // 根据 RISC-V C ABI，a1 寄存器存放 argv 指针
+  p->trapframe->a2 = envp_user;  // MyOS 约定：a2 传递 envp 指针
 
   // 释放内核暂存参数时借用的临时物理页
   for (int i = 0; i < MAXARG; i++)
   {
     if (argv[i])
       kfree((void *)argv[i]);
+    if (env[i])
+      kfree((void *)env[i]);
   }
   // 释放老程序占用的旧页表和旧物理内存（防 OOM 核心）
   if (old_pagetable != 0)
@@ -712,6 +758,8 @@ bad:
   {
     if (argv[i])
       kfree((void *)argv[i]);
+    if (env[i])
+      kfree((void *)env[i]);
   }
   if (new_pagetable)
     proc_freepagetable(new_pagetable, sz);

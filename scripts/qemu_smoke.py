@@ -224,6 +224,10 @@ def test_shell(q):
     require(out, "vi", "vi editor in /bin")
     require(out, "grep", "grep tool in /bin")
     require(out, "install", "install tool in /bin")
+    require(out, "cc", "system C compiler slot in /bin")
+    require(out, "gcc", "GCC driver slot in /bin")
+    require(out, "as", "assembler slot in /bin")
+    require(out, "ld", "linker slot in /bin")
     forbid(out, "edit", "removed edit alias in /bin")
     forbid(out, "kilo", "removed kilo editor in /bin")
 
@@ -1064,6 +1068,62 @@ def test_tcc_scanf(q):
     require(out, "x=42", "scanf runtime result")
 
 
+def test_binutils_wrappers(q):
+    cleanup(q, "av.s", "ac.c", "av.o", "ac.o", "asld")
+    asm_source = (
+        b"i.global asm_value\n"
+        b".text\n"
+        b"asm_value:\n"
+        b" li a0,77\n"
+        b" ret\n"
+        b"\x1b:wq\r"
+    )
+    c_source = (
+        b"i#include <stdio.h>\n"
+        b"extern int asm_value(void);\n"
+        b"int main(){ printf(\"ASLD:%d\\n\", asm_value()); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+
+    q.vi("av.s", asm_source, timeout=10)
+    q.vi("ac.c", c_source, timeout=10)
+
+    out = q.command("as av.s -o av.o", timeout=30)
+    forbid(out, "error:", "as wrapper error")
+    forbid(out, "unsupported option", "as wrapper unsupported option")
+
+    out = q.command("tcc -c ac.c -o ac.o", timeout=30)
+    forbid(out, "error:", "tcc object compile error")
+
+    out = q.command("ld ac.o av.o -o asld", timeout=30)
+    forbid(out, "error:", "ld wrapper error")
+    forbid(out, "unsupported option", "ld wrapper unsupported option")
+
+    out = q.command("./asld", timeout=10)
+    require(out, "ASLD:77", "as/ld linked program output")
+    out = q.command("echo $?")
+    require(out, "\n0\n", "as/ld linked program exit status")
+
+
+def test_gcc_driver_slot(q):
+    cleanup(q, "ccslot", "gccslot")
+
+    out = q.command("cc /src/userland/hello.c -o ccslot", timeout=30)
+    forbid(out, "error:", "cc slot compile error")
+    out = q.command("./ccslot", timeout=10)
+    require(out, "HELLO_USERLAND", "cc slot compiled program output")
+
+    out = q.command("gcc /src/userland/hello.c -o gccslot", timeout=30)
+    forbid(out, "error:", "gcc slot compile error")
+    out = q.command("./gccslot", timeout=10)
+    require(out, "HELLO_USERLAND", "gcc slot compiled program output")
+
+    out = q.command("gcc -print-prog-name=as", timeout=5)
+    require(out, "/bin/as", "gcc driver assembler path")
+    out = q.command("gcc -print-prog-name=ld", timeout=5)
+    require(out, "/bin/ld", "gcc driver linker path")
+
+
 def test_cxx_contract(q):
     out = q.command("cat /src/tests/cxx_ct.cc", timeout=5)
     require(out, "CXX_CONTRACT_PASS", "cxx contract source in image")
@@ -1326,6 +1386,8 @@ def main():
         ("runtests", test_runtests_tool),
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),
+        ("binutils-wrappers", test_binutils_wrappers),
+        ("gcc-driver-slot", test_gcc_driver_slot),
         ("gcc-contract", test_gcc_contract),
         ("gcc-static-contract", test_gcc_static_contract),
         ("gcc-userland", test_gcc_userland),
