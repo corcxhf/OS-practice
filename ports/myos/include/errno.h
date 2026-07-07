@@ -23,5 +23,6 @@ extern int *__errno_location(void);
 #define EISDIR 21
 #define EINVAL 22
 #define ENOTTY 25
+#define ENOSYS 38
 
 #endif

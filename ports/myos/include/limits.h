@@ -1,0 +1,13 @@
+#ifndef _LIMITS_H
+#define _LIMITS_H
+
+#define CHAR_BIT 8
+#define INT_MAX 2147483647
+#define INT_MIN (-INT_MAX - 1)
+#define LONG_MAX 9223372036854775807L
+#define LONG_MIN (-LONG_MAX - 1L)
+#define ULONG_MAX 18446744073709551615UL
+#define PATH_MAX 128
+#define NAME_MAX 14
+
+#endif

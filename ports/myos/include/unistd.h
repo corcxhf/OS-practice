@@ -2,8 +2,7 @@
 #define _UNISTD_H
 
 #include <stddef.h>
-
-typedef long ssize_t;
+#include <sys/types.h>
 
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
@@ -38,6 +37,11 @@ int waitpid(int pid, int *status, int options);
 int kill(int pid, int sig);
 int access(const char *path, int mode);
 int faccessat(int dirfd, const char *pathname, int mode, int flags);
+int chmod(const char *path, mode_t mode);
+int fchmod(int fd, mode_t mode);
+int readlink(const char *path, char *buf, size_t bufsiz);
+long sysconf(int name);
+int getpagesize(void);
 
 #ifdef __cplusplus
 }
@@ -45,5 +49,11 @@ int faccessat(int dirfd, const char *pathname, int mode, int flags);
 
 #define AT_FDCWD -100
 #define R_OK 4
+#define W_OK 2
+#define X_OK 1
+#define F_OK 0
+
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE _SC_PAGESIZE
 
 #endif

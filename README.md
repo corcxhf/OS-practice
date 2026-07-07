@@ -295,6 +295,8 @@ build/riscv64-myos-gcc tests/libc_contract.c -o build/gcc-libc-contract
 
 当前 GCC static contract 也开始覆盖更基础的宿主环境语义：`ftruncate`、`dup2`、`mkdir`、`chdir`、`getcwd`，以及 libc 层的 `openat` / `fstatat` / `faccessat` 兼容入口。它们还不是完整 POSIX 实现，但已经把编译器和构建工具常见的临时文件、工作目录和重定向路径纳入 QEMU 回归。
 
+随后补上的 POSIX helper 层覆盖了 `mkstemp`、`tmpfile`、`mkdtemp`、`opendir/readdir/closedir`、`realpath`、`qsort`、`sysconf(_SC_PAGESIZE)`、`getpagesize`、`chmod/umask` 和环境变量空实现。这批接口主要服务于 GCC driver、cc1、assembler/linker 启动前后的宿主环境探测和临时文件工作流。
+
 ## C++ 适配目标
 
 C++ 当前不作为 native 编译器移植的第一优先级。它的目标是先形成一条稳定、可测试、可逐步扩展的 freestanding C++ 路线，为后续 g++ 回归做准备：

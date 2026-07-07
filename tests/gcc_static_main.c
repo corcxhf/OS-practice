@@ -1,5 +1,6 @@
 #include "gcc_static_lib.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -273,6 +274,111 @@ static void test_dup2_redirect(void)
     expect_str("dup2-content", buf, "dup2-ok");
 }
 
+static int int_compare(const void *left, const void *right)
+{
+    int a = *(const int *)left;
+    int b = *(const int *)right;
+    return (a > b) - (a < b);
+}
+
+static void test_posix_host_helpers(void)
+{
+    char tmp_template[] = "/tmp/gccXXXXXX";
+    char dir_template[] = "/tmp/gcdXXXXXX";
+    char real_buf[64];
+    char tmp_buf[32];
+    int values[] = {5, 1, 4, 2, 3};
+    int saw_dot = 0;
+    int saw_dotdot = 0;
+    int saw_file = 0;
+    int fd;
+    FILE *tf;
+    DIR *dir;
+    struct dirent *de;
+
+    fd = mkstemp(tmp_template);
+    if (fd < 0)
+    {
+        fail("mkstemp");
+        return;
+    }
+    expect_int("mkstemp-write", write(fd, "tmp-ok", 6), 6);
+    close(fd);
+    if (read_file(tmp_template, tmp_buf, sizeof(tmp_buf)) < 0)
+    {
+        fail("mkstemp-read");
+        return;
+    }
+    expect_str("mkstemp-content", tmp_buf, "tmp-ok");
+    expect_int("mkstemp-unlink", unlink(tmp_template), 0);
+
+    tf = tmpfile();
+    if (!tf)
+    {
+        fail("tmpfile");
+        return;
+    }
+    expect_int("tmpfile-write", fwrite("stdio-temp", 1, 10, tf), 10);
+    expect_int("tmpfile-seek", fseek(tf, 0, SEEK_SET), 0);
+    memset(tmp_buf, 0, sizeof(tmp_buf));
+    expect_int("tmpfile-read", fread(tmp_buf, 1, sizeof(tmp_buf) - 1, tf), 10);
+    expect_str("tmpfile-content", tmp_buf, "stdio-temp");
+    expect_int("tmpfile-close", fclose(tf), 0);
+
+    if (!mkdtemp(dir_template))
+    {
+        fail("mkdtemp");
+        return;
+    }
+    expect_int("chdir-temp-dir", chdir(dir_template), 0);
+    fd = open("dir_file", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0)
+    {
+        fail("dir-file-open");
+        chdir("/");
+        return;
+    }
+    close(fd);
+    dir = opendir(".");
+    if (!dir)
+    {
+        fail("opendir");
+        chdir("/");
+        return;
+    }
+    while ((de = readdir(dir)) != 0)
+    {
+        if (strcmp(de->d_name, ".") == 0)
+            saw_dot = 1;
+        else if (strcmp(de->d_name, "..") == 0)
+            saw_dotdot = 1;
+        else if (strcmp(de->d_name, "dir_file") == 0)
+            saw_file = 1;
+    }
+    expect_int("closedir", closedir(dir), 0);
+    expect_int("readdir-dot", saw_dot, 1);
+    expect_int("readdir-dotdot", saw_dotdot, 1);
+    expect_int("readdir-file", saw_file, 1);
+    expect_int("unlink-dir-file", unlink("dir_file"), 0);
+    expect_int("chdir-root-after-dir", chdir("/"), 0);
+    expect_int("unlink-temp-dir", unlink(dir_template), 0);
+
+    if (!realpath("tmp", real_buf))
+        fail("realpath");
+    else
+        expect_str("realpath-relative", real_buf, "/tmp");
+
+    qsort(values, sizeof(values) / sizeof(values[0]), sizeof(values[0]), int_compare);
+    expect_int("qsort-first", values[0], 1);
+    expect_int("qsort-last", values[4], 5);
+    expect_int("sysconf-pagesize", sysconf(_SC_PAGESIZE), 4096);
+    expect_int("getpagesize", getpagesize(), 4096);
+    expect_int("chmod", chmod("/tmp", 0777), 0);
+    expect_int("umask", umask(022), 0);
+    expect_int("setenv", setenv("MYOS_GCC", "1", 1), 0);
+    expect_int("unsetenv", unsetenv("MYOS_GCC"), 0);
+}
+
 static void test_exec_redirect(void)
 {
     char *child_argv[] = {"/bin/gcc-hello", 0};
@@ -318,6 +424,7 @@ int main(int argc, char **argv)
     test_open_flags();
     test_pipe_fork_wait();
     test_dup2_redirect();
+    test_posix_host_helpers();
     test_exec_redirect();
 
     remove("gs_stdio");

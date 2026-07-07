@@ -1093,6 +1093,7 @@ def test_gcc_static_contract(q):
     require(out, "test_pipe_fork_wait", "gcc static main covers pipe/fork/wait")
     require(out, "test_dup2_redirect", "gcc static main covers dup2 redirect")
     require(out, "getcwd-dir", "gcc static main covers getcwd/chdir")
+    require(out, "test_posix_host_helpers", "gcc static main covers POSIX host helpers")
     out = q.command("cat /src/tests/gccst_lib.c", timeout=5)
     require(out, "gcc_static_count_words", "gcc static lib source in image")
     out = q.command("cat /src/tests/gccst_lib.h", timeout=5)

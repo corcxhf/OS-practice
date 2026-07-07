@@ -37,6 +37,7 @@ typedef unsigned int uint;
 #define O_EXCL 0x800
 #define O_APPEND 0x1000
 #define AT_FDCWD -100
+#define _SC_PAGESIZE 30
 #define R_OK 4
 
 #define SEEK_SET 0
@@ -55,7 +56,27 @@ typedef struct FILE
     int fd;
     int eof;
     int err;
+    int unlink_on_close;
+    char unlink_path[128];
 } FILE;
+
+struct dirent
+{
+    unsigned long d_ino;
+    char d_name[14];
+};
+
+typedef struct DIR
+{
+    int fd;
+    struct dirent ent;
+} DIR;
+
+struct myos_dirent
+{
+    unsigned short inum;
+    char name[14];
+};
 
 struct winsize
 {
@@ -89,6 +110,7 @@ void *malloc(size_t nbytes);
 void *realloc(void *ptr, size_t nbytes);
 long strtol(const char *nptr, char **endptr, int base);
 void *memset(void *dst, int c, size_t n);
+static char *copy_cstr(char *dst, size_t cap, const char *src);
 
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2)
 {
@@ -347,6 +369,35 @@ int fcntl(int fd, int cmd, ...)
     return 0;
 }
 
+int chmod(const char *path, mode_t mode)
+{
+    (void)path;
+    (void)mode;
+    return 0;
+}
+
+int fchmod(int fd, mode_t mode)
+{
+    (void)fd;
+    (void)mode;
+    return 0;
+}
+
+mode_t umask(mode_t mode)
+{
+    (void)mode;
+    return 0;
+}
+
+int readlink(const char *path, char *buf, size_t bufsiz)
+{
+    (void)path;
+    (void)buf;
+    (void)bufsiz;
+    errno_value = 22;
+    return -1;
+}
+
 size_t strlen(const char *s)
 {
     size_t n = 0;
@@ -382,6 +433,21 @@ char *strcpy(char *dst, const char *src)
     while ((*dst++ = *src++))
         ;
     return ret;
+}
+
+static char *copy_cstr(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+
+    if (cap == 0)
+        return dst;
+    while (src && src[i] && i + 1 < cap)
+    {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+    return dst;
 }
 
 char *strncpy(char *dst, const char *src, size_t n)
@@ -664,9 +730,9 @@ void *realloc(void *ptr, size_t nbytes)
 }
 
 static FILE std_files[3] = {
-    {0, 0, 0},
-    {1, 0, 0},
-    {2, 0, 0},
+    {0, 0, 0, 0, {0}},
+    {1, 0, 0, 0, {0}},
+    {2, 0, 0, 0, {0}},
 };
 
 FILE *stdin = &std_files[0];
@@ -710,6 +776,8 @@ FILE *fopen(const char *filename, const char *mode)
     f->fd = fd;
     f->eof = 0;
     f->err = 0;
+    f->unlink_on_close = 0;
+    f->unlink_path[0] = 0;
     return f;
 }
 
@@ -725,6 +793,93 @@ FILE *fdopen(int fd, const char *mode)
     f->fd = fd;
     f->eof = 0;
     f->err = 0;
+    f->unlink_on_close = 0;
+    f->unlink_path[0] = 0;
+    return f;
+}
+
+static int fill_temp_template(char *template, int suffixlen, int create_dir)
+{
+    static unsigned long temp_counter;
+    static const char chars[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    int len = (int)strlen(template);
+    int x_end = len - suffixlen;
+    int x_start = x_end - 6;
+
+    if (suffixlen < 0 || x_start < 0)
+    {
+        errno_value = 22;
+        return -1;
+    }
+    for (int i = x_start; i < x_end; i++)
+    {
+        if (template[i] != 'X')
+        {
+            errno_value = 22;
+            return -1;
+        }
+    }
+
+    for (unsigned long attempt = 0; attempt < 4096; attempt++)
+    {
+        unsigned long value = temp_counter++ + (unsigned long)getpid() * 131 + attempt;
+        int fd;
+
+        for (int i = x_end - 1; i >= x_start; i--)
+        {
+            template[i] = chars[value % (sizeof(chars) - 1)];
+            value /= sizeof(chars) - 1;
+        }
+
+        if (create_dir)
+        {
+            if (mkdir(template, 0700) == 0)
+                return 0;
+        }
+        else
+        {
+            fd = open(template, O_RDWR | O_CREAT | O_EXCL);
+            if (fd >= 0)
+                return fd;
+        }
+    }
+
+    errno_value = 17;
+    return -1;
+}
+
+int mkstemps(char *template, int suffixlen)
+{
+    return fill_temp_template(template, suffixlen, 0);
+}
+
+int mkstemp(char *template)
+{
+    return mkstemps(template, 0);
+}
+
+char *mkdtemp(char *template)
+{
+    return fill_temp_template(template, 0, 1) == 0 ? template : NULL;
+}
+
+FILE *tmpfile(void)
+{
+    char path[] = "/tmp/tmpXXXXXX";
+    int fd = mkstemp(path);
+    FILE *f;
+
+    if (fd < 0)
+        return NULL;
+    f = fdopen(fd, "w+");
+    if (!f)
+    {
+        close(fd);
+        unlink(path);
+        return NULL;
+    }
+    f->unlink_on_close = 1;
+    copy_cstr(f->unlink_path, sizeof(f->unlink_path), path);
     return f;
 }
 
@@ -736,6 +891,8 @@ int fclose(FILE *stream)
     if (stream != stdin && stream != stdout && stream != stderr)
     {
         ret = close(stream->fd);
+        if (stream->unlink_on_close)
+            unlink(stream->unlink_path);
         free(stream);
     }
     return ret;
@@ -1288,6 +1445,106 @@ char *getenv(const char *name)
     return NULL;
 }
 
+int setenv(const char *name, const char *value, int overwrite)
+{
+    (void)name;
+    (void)value;
+    (void)overwrite;
+    return 0;
+}
+
+int unsetenv(const char *name)
+{
+    (void)name;
+    return 0;
+}
+
+int putenv(char *string)
+{
+    (void)string;
+    return 0;
+}
+
+char *realpath(const char *path, char *resolved_path)
+{
+    char cwd_buf[128];
+    char *out = resolved_path;
+    size_t pos = 0;
+
+    if (!path)
+        return NULL;
+    if (!out)
+    {
+        out = malloc(128);
+        if (!out)
+            return NULL;
+    }
+
+    if (path[0] == '/')
+    {
+        copy_cstr(out, 128, path);
+        return out;
+    }
+
+    if (!getcwd(cwd_buf, sizeof(cwd_buf)))
+    {
+        if (!resolved_path)
+            free(out);
+        return NULL;
+    }
+    copy_cstr(out, 128, cwd_buf);
+    pos = strlen(out);
+    if (pos + 1 < 128 && !(pos == 1 && out[0] == '/'))
+        out[pos++] = '/';
+    copy_cstr(out + pos, 128 - pos, path);
+    return out;
+}
+
+static void swap_bytes(char *a, char *b, size_t size)
+{
+    while (size--)
+    {
+        char tmp = *a;
+        *a++ = *b;
+        *b++ = tmp;
+    }
+}
+
+void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *))
+{
+    char *items = base;
+
+    if (!items || size == 0 || !compar)
+        return;
+    for (size_t i = 1; i < nmemb; i++)
+    {
+        size_t j = i;
+        while (j > 0 && compar(items + j * size, items + (j - 1) * size) < 0)
+        {
+            swap_bytes(items + j * size, items + (j - 1) * size, size);
+            j--;
+        }
+    }
+}
+
+long sysconf(int name)
+{
+    if (name == _SC_PAGESIZE)
+        return 4096;
+    errno_value = 22;
+    return -1;
+}
+
+int getpagesize(void)
+{
+    return 4096;
+}
+
+void abort(void)
+{
+    exit(134);
+}
+
 long time(long *tloc)
 {
     if (tloc)
@@ -1402,8 +1659,65 @@ int toupper(int c)
 
 char *strerror(int errnum)
 {
-    (void)errnum;
+    if (errnum == 2)
+        return "No such file or directory";
+    if (errnum == 5)
+        return "Input/output error";
+    if (errnum == 12)
+        return "Out of memory";
+    if (errnum == 17)
+        return "File exists";
+    if (errnum == 22)
+        return "Invalid argument";
+    if (errnum == 25)
+        return "Not a tty";
     return "error";
 }
 
 char *environ[] = {NULL};
+
+DIR *opendir(const char *name)
+{
+    int fd = open(name, O_RDONLY);
+    DIR *dir;
+
+    if (fd < 0)
+        return NULL;
+    dir = malloc(sizeof(DIR));
+    if (!dir)
+    {
+        close(fd);
+        return NULL;
+    }
+    dir->fd = fd;
+    memset(&dir->ent, 0, sizeof(dir->ent));
+    return dir;
+}
+
+struct dirent *readdir(DIR *dirp)
+{
+    struct myos_dirent raw;
+
+    if (!dirp)
+        return NULL;
+    while (read(dirp->fd, &raw, sizeof(raw)) == (ssize_t)sizeof(raw))
+    {
+        if (raw.inum == 0)
+            continue;
+        dirp->ent.d_ino = raw.inum;
+        memcpy(dirp->ent.d_name, raw.name, sizeof(dirp->ent.d_name));
+        return &dirp->ent;
+    }
+    return NULL;
+}
+
+int closedir(DIR *dirp)
+{
+    int ret;
+
+    if (!dirp)
+        return -1;
+    ret = close(dirp->fd);
+    free(dirp);
+    return ret;
+}

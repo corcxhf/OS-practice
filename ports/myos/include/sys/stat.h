@@ -36,6 +36,8 @@ int fstat(int fd, struct stat *st);
 int fstatat(int dirfd, const char *pathname, struct stat *st, int flags);
 int access(const char *path, int mode);
 int mkdir(const char *path, mode_t mode);
+int chmod(const char *path, mode_t mode);
+mode_t umask(mode_t mode);
 
 #ifdef __cplusplus
 }
