@@ -106,6 +106,11 @@ uint64 sys_open(void)
         {
             /* 若存在：直接使用 */
             iunlockput(dp);
+            if (flags & O_EXCL)
+            {
+                iput(ip);
+                return -1;
+            }
             ilock(ip);
             // 如果已存在的是目录且要求写入，通常是不允许的
             if (ip->type == T_DIR && (flags & (O_WRONLY | O_RDWR)))
@@ -157,6 +162,8 @@ uint64 sys_open(void)
     f->off = 0;
     f->readable = !(flags & O_WRONLY); // 默认读，除非只写
     f->writable = ((flags & O_WRONLY) || (flags & O_RDWR));
+    if ((flags & O_APPEND) && ip->type == T_FILE)
+        f->off = ip->size;
 
     /* 8. 返回 fd，保持 inode 的引用计数但解锁 */
     iunlock(ip);

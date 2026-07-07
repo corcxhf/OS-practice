@@ -34,6 +34,12 @@
 #ifndef O_TRUNC
 #define O_TRUNC 0x400
 #endif
+#ifndef O_EXCL
+#define O_EXCL 0x800
+#endif
+#ifndef O_APPEND
+#define O_APPEND 0x1000
+#endif
 
 struct superblock
 {

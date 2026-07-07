@@ -136,6 +136,44 @@ static void test_sys_files(void)
     expect_int("access-unlinked", access("gs_ren", R_OK), -1);
 }
 
+static void test_open_flags(void)
+{
+    char buf[32];
+    int fd;
+
+    remove("gs_flags");
+    fd = open("gs_flags", O_WRONLY | O_CREAT | O_EXCL);
+    if (fd < 0)
+    {
+        fail("open-excl-create");
+        return;
+    }
+    expect_int("open-excl-write", write(fd, "first", 5), 5);
+    close(fd);
+
+    errno = 0;
+    fd = open("gs_flags", O_WRONLY | O_CREAT | O_EXCL);
+    expect_int("open-excl-existing", fd, -1);
+    expect_int("open-excl-errno", errno, EEXIST);
+
+    fd = open("gs_flags", O_WRONLY | O_APPEND);
+    if (fd < 0)
+    {
+        fail("open-append");
+        return;
+    }
+    expect_int("append-write", write(fd, "+tail", 5), 5);
+    close(fd);
+
+    if (read_file("gs_flags", buf, sizeof(buf)) < 0)
+    {
+        fail("append-read");
+        return;
+    }
+    expect_str("append-content", buf, "first+tail");
+    expect_int("unlink-flags", unlink("gs_flags"), 0);
+}
+
 static void test_pipe_fork_wait(void)
 {
     int fds[2];
@@ -215,12 +253,14 @@ int main(int argc, char **argv)
     test_multi_object_and_argv(argc, argv);
     test_stdio_files();
     test_sys_files();
+    test_open_flags();
     test_pipe_fork_wait();
     test_exec_redirect();
 
     remove("gs_stdio");
     remove("gs_raw");
     remove("gs_ren");
+    remove("gs_flags");
     remove("gs_exec");
 
     if (failures)
