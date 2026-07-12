@@ -23,6 +23,7 @@ struct inode;
 extern void iunlockput(struct inode *ip);
 
 extern struct file *filealloc();
+extern struct file *filedup(struct file *f);
 extern void fileclose(struct file *f);
 extern int fdalloc(struct file *f);
 extern void wakeup(void *chan);
@@ -33,6 +34,11 @@ extern void acquire(struct spinlock *);
 extern void release(struct spinlock *lk);
 
 #define TIOCINQ 0x541B
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_GETFL 3
+#define F_SETFL 4
 
 uint64 sys_ioctl(void)
 {
@@ -54,6 +60,49 @@ uint64 sys_ioctl(void)
         return 0;
     }
     return -1;
+}
+
+uint64 sys_fcntl(void)
+{
+    int fd, cmd, arg;
+    struct file *f;
+    struct proc *p = myproc();
+
+    if (argint(0, &fd) < 0 || argint(1, &cmd) < 0 || argint(2, &arg) < 0)
+        return -1;
+    if (fd < 0 || fd >= NOFILE || (f = p->ofile[fd]) == 0)
+        return -1;
+
+    switch (cmd)
+    {
+    case F_DUPFD:
+        if (arg < 0 || arg >= NOFILE)
+            return -1;
+        for (int newfd = arg; newfd < NOFILE; newfd++)
+        {
+            if (p->ofile[newfd] == 0)
+            {
+                p->ofile[newfd] = f;
+                filedup(f);
+                return newfd;
+            }
+        }
+        return -1;
+    case F_GETFD:
+        return 0;
+    case F_SETFD:
+        return 0;
+    case F_GETFL:
+        if (f->readable && f->writable)
+            return O_RDWR;
+        if (f->writable)
+            return O_WRONLY;
+        return O_RDONLY;
+    case F_SETFL:
+        return 0;
+    default:
+        return -1;
+    }
 }
 
 uint64 sys_open(void)

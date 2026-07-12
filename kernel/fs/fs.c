@@ -65,8 +65,11 @@ extern void iunlockput(struct inode *ip);
 uint bmap(struct inode *ip, uint bn)
 {
   uint addr;
+  uint addr2;
   struct buf *bp;
+  struct buf *bp2;
   uint *a;
+  uint *b;
 
   /* --- 1. 直接映射（前 NDIRECT 个逻辑块） --- */
   if (bn < NDIRECT)
@@ -109,6 +112,37 @@ uint bmap(struct inode *ip, uint bn)
 
     /* 释放 buffer 占用，但不修改 valid，因为数据还在缓存里 */
     brelse(bp);
+    return addr;
+  }
+
+  bn -= NINDIRECT;
+
+  /* --- 3. 二级间接映射：给 GNU as / ld 这类大文件留出空间 --- */
+  if (bn < NDINDIRECT)
+  {
+    uint first = bn / NINDIRECT;
+    uint second = bn % NINDIRECT;
+
+    if ((addr = ip->addrs[NDIRECT + 1]) == 0)
+      addr = ip->addrs[NDIRECT + 1] = balloc(ip->dev);
+
+    bp = bread(ip->dev, addr);
+    a = (uint *)bp->data;
+    if ((addr2 = a[first]) == 0)
+    {
+      addr2 = a[first] = balloc(ip->dev);
+      bwrite(bp);
+    }
+    brelse(bp);
+
+    bp2 = bread(ip->dev, addr2);
+    b = (uint *)bp2->data;
+    if ((addr = b[second]) == 0)
+    {
+      addr = b[second] = balloc(ip->dev);
+      bwrite(bp2);
+    }
+    brelse(bp2);
     return addr;
   }
 
@@ -185,14 +219,29 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 {
   uint tot, m;
   struct buf *bp;
-  if (off > ip->size || off + n < off)
-  {
-    printf("\n[FS FATAL] writei 越界拦截！文件当前大小=%d, 企图写入位置=%d\n", ip->size, off);
-    return -1;
-  }
 
-  if (off + n > (NDIRECT + NINDIRECT) * BSIZE)
+  if (off + n < off)
     return -1;
+
+  if (off + n > MAXFILE * BSIZE)
+    return -1;
+
+  if (n == 0)
+    return 0;
+
+  if (off > ip->size)
+  {
+    char zeros[128];
+    memset(zeros, 0, sizeof(zeros));
+    while (ip->size < off)
+    {
+      uint gap = off - ip->size;
+      if (gap > sizeof(zeros))
+        gap = sizeof(zeros);
+      if (writei(ip, 0, (uint64)zeros, ip->size, gap) != (int)gap)
+        return -1;
+    }
+  }
 
   for (tot = 0; tot < n; tot += m, off += m, src += m)
   {
@@ -304,7 +353,9 @@ void iunlock(struct inode *ip)
 void itrunc(struct inode *ip)
 {
   struct buf *bp;
+  struct buf *bp2;
   uint *a;
+  uint *b;
 
   for (int i = 0; i < NDIRECT; i++)
   {
@@ -327,6 +378,30 @@ void itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if (ip->addrs[NDIRECT + 1])
+  {
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint *)bp->data;
+    for (int i = 0; i < NINDIRECT; i++)
+    {
+      if (a[i])
+      {
+        bp2 = bread(ip->dev, a[i]);
+        b = (uint *)bp2->data;
+        for (int j = 0; j < NINDIRECT; j++)
+        {
+          if (b[j])
+            bfree(ip->dev, b[j]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[i]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
@@ -637,11 +712,17 @@ struct inode *nameiparent(char *path, char *name)
 
 void stati(struct inode *ip, struct stat *st)
 {
-  st->dev = ip->dev;
-  st->ino = ip->inum;
-  st->type = ip->type;
-  st->nlink = ip->nlink;
-  st->size = ip->size;
+  memset(st, 0, sizeof(*st));
+  st->st_dev = ip->dev;
+  st->st_ino = ip->inum;
+  st->st_mode = ip->type;
+  st->st_nlink = ip->nlink;
+  st->st_size = ip->size;
+  st->st_atime = 1;
+  st->st_mtime = 1;
+  st->st_ctime = 1;
+  st->st_uid = 0;
+  st->st_gid = 0;
 }
 
 int strncmp(const char *p, const char *q, uint n)

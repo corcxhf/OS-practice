@@ -90,7 +90,7 @@ struct inode
     short minor;
     short nlink;
     uint size;
-    uint addrs[NDIRECT + 1];
+    uint addrs[NDIRECT + 2];
 };
 
 struct dirent
@@ -106,16 +106,41 @@ struct dinode
     short minor;             /* 设备次号（仅 type==3 时有效）*/
     short nlink;             /* 硬链接计数 */
     uint size;               /* 文件大小（字节数）*/
-    uint addrs[NDIRECT + 1]; /* 数据块地址：前 NDIRECT 个是直接，最后一个是一级间接 */
+    uint addrs[NDIRECT + 2]; /* 直接块、一级间接块、二级间接块 */
 };
 
 struct stat
 {
-    int dev;     // 文件所在磁盘的设备号
-    uint ino;    // Inode 编号 (相当于文件的身份证号)
-    short type;  // 文件类型 (T_DIR, T_FILE 等)
-    short nlink; // 硬链接数量
-    uint64 size; // 文件大小（字节数）
+    union
+    {
+        int st_dev;
+        int dev;
+    };
+    union
+    {
+        uint st_ino;
+        uint ino;
+    };
+    union
+    {
+        short st_mode;
+        short type;
+    };
+    union
+    {
+        short st_nlink;
+        short nlink;
+    };
+    union
+    {
+        long st_size;
+        uint64 size;
+    };
+    long st_atime;
+    long st_mtime;
+    long st_ctime;
+    uint st_uid;
+    uint st_gid;
 };
 
 struct pipe

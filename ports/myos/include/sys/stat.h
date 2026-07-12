@@ -9,7 +9,11 @@ struct stat {
     short st_mode;
     short st_nlink;
     long st_size;
+    time_t st_atime;
     time_t st_mtime;
+    time_t st_ctime;
+    uid_t st_uid;
+    gid_t st_gid;
 };
 
 #define S_IRUSR 0400

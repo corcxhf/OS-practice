@@ -10,8 +10,10 @@ typedef uint16_t ushort;
 
 #define BSIZE 1024
 #define FSMAGIC 0x10203040
-#define NDIRECT 12
+#define NDIRECT 11
 #define NINDIRECT (BSIZE / sizeof(uint))
+#define NDINDIRECT (NINDIRECT * NINDIRECT)
+#define BPB (BSIZE * 8)
 #define DIRSIZ 14
 #define IPB (BSIZE / sizeof(struct dinode))
 
@@ -19,20 +21,22 @@ typedef uint16_t ushort;
 #define T_FILE 2
 #define T_DEVICE 3
 
-#define FS_SIZE 2000
-#define NINODES 400
+#define FS_SIZE 16384
+#define NINODES 512
 #define NLOG 30
 #define LOG_START 2
 #define INODE_START 32
 #define INODE_BLOCKS ((NINODES + IPB - 1) / IPB)
 #define BMAP_START (INODE_START + INODE_BLOCKS)
 #define ROOTINO 1
-#define ROOT_BLOCK (BMAP_START + 1)
+#define BMAP_BLOCKS ((FS_SIZE + BPB - 1) / BPB)
+#define ROOT_BLOCK (BMAP_START + BMAP_BLOCKS)
 #define FIRST_DATA_BLOCK (ROOT_BLOCK + 1)
 
 #define MAX_IMAGE_PATH 128
 #define MAX_DIRS 32
 #define MAX_DIRENTS (BSIZE / sizeof(struct dirent))
+#define MAX_PACKED_FILES 512
 
 struct superblock
 {
@@ -53,7 +57,7 @@ struct dinode
     short minor;
     short nlink;
     uint size;
-    uint addrs[NDIRECT + 1];
+    uint addrs[NDIRECT + 2];
 };
 
 struct dirent
@@ -73,11 +77,20 @@ struct image_dir
     int nentry;
 };
 
+struct image_file
+{
+    char src[MAX_IMAGE_PATH];
+    uint inum;
+    struct dinode inode;
+};
+
 static int fsfd;
 static uint freeinode = ROOTINO + 1;
 static uint freeblock = FIRST_DATA_BLOCK;
 static struct image_dir dirs[MAX_DIRS];
 static int ndirs;
+static struct image_file files[MAX_PACKED_FILES];
+static int nfiles;
 
 static struct image_dir *ensure_dir(const char *path);
 
@@ -188,6 +201,16 @@ static struct image_dir *find_dir(const char *path)
     {
         if (strcmp(dirs[i].path, path) == 0)
             return &dirs[i];
+    }
+    return 0;
+}
+
+static struct image_file *find_file(const char *src)
+{
+    for (int i = 0; i < nfiles; i++)
+    {
+        if (strcmp(files[i].src, src) == 0)
+            return &files[i];
     }
     return 0;
 }
@@ -366,16 +389,21 @@ static void parse_mapping(const char *arg, char *src, char *dst)
 static void add_file_data(int hostfd, struct dinode *inode, const char *src)
 {
     uint indirect[NINDIRECT];
+    uint dindirect[NINDIRECT];
+    uint second[NINDIRECT];
     char buf[BSIZE];
     int block_index = 0;
+    int current_second = -1;
     ssize_t nread;
 
     memset(indirect, 0, sizeof(indirect));
+    memset(dindirect, 0, sizeof(dindirect));
+    memset(second, 0, sizeof(second));
     while (memset(buf, 0, sizeof(buf)), (nread = read(hostfd, buf, sizeof(buf))) > 0)
     {
         uint data_block;
 
-        if (block_index >= NDIRECT + NINDIRECT)
+        if (block_index >= NDIRECT + NINDIRECT + NDINDIRECT)
         {
             fprintf(stderr, "mkfs: file too large: %s\n", src);
             exit(1);
@@ -389,8 +417,26 @@ static void add_file_data(int hostfd, struct dinode *inode, const char *src)
 
         if (block_index < NDIRECT)
             inode->addrs[block_index] = data_block;
-        else
+        else if (block_index < NDIRECT + NINDIRECT)
             indirect[block_index - NDIRECT] = data_block;
+        else
+        {
+            int rel = block_index - NDIRECT - NINDIRECT;
+            int outer = rel / NINDIRECT;
+            int inner = rel % NINDIRECT;
+
+            if (inode->addrs[NDIRECT + 1] == 0)
+                inode->addrs[NDIRECT + 1] = alloc_block();
+            if (outer != current_second)
+            {
+                if (current_second >= 0)
+                    write_block(dindirect[current_second], second);
+                current_second = outer;
+                memset(second, 0, sizeof(second));
+                dindirect[outer] = alloc_block();
+            }
+            second[inner] = data_block;
+        }
 
         inode->size += nread;
         block_index++;
@@ -404,6 +450,10 @@ static void add_file_data(int hostfd, struct dinode *inode, const char *src)
 
     if (inode->addrs[NDIRECT] != 0)
         write_block(inode->addrs[NDIRECT], indirect);
+    if (current_second >= 0)
+        write_block(dindirect[current_second], second);
+    if (inode->addrs[NDIRECT + 1] != 0)
+        write_block(inode->addrs[NDIRECT + 1], dindirect);
 }
 
 static void add_file(const char *src, const char *dst)
@@ -411,6 +461,7 @@ static void add_file(const char *src, const char *dst)
     char parent[MAX_IMAGE_PATH];
     char name[DIRSIZ + 1];
     struct image_dir *dir;
+    struct image_file *existing;
     struct dinode inode;
     uint inum;
     int hostfd;
@@ -418,6 +469,17 @@ static void add_file(const char *src, const char *dst)
     parent_and_name(dst, parent, name);
     check_component_name(name);
     dir = ensure_dir(parent);
+
+    existing = find_file(src);
+    if (existing)
+    {
+        existing->inode.nlink++;
+        write_inode(existing->inum, &existing->inode);
+        dir_add(dir, name, existing->inum);
+        printf("成功链接: %s <= %s (Inode: %u, nlink: %d)\n",
+               dst, src, existing->inum, existing->inode.nlink);
+        return;
+    }
 
     hostfd = open(src, O_RDONLY);
     if (hostfd < 0)
@@ -432,6 +494,13 @@ static void add_file(const char *src, const char *dst)
     inode.nlink = 1;
     add_file_data(hostfd, &inode, src);
     close(hostfd);
+
+    if (nfiles >= MAX_PACKED_FILES)
+        die("too many packed files");
+    strncpy(files[nfiles].src, src, sizeof(files[nfiles].src) - 1);
+    files[nfiles].inum = inum;
+    files[nfiles].inode = inode;
+    nfiles++;
 
     write_inode(inum, &inode);
     dir_add(dir, name, inum);
@@ -457,10 +526,19 @@ static void write_bitmap(void)
 {
     unsigned char bmap[BSIZE];
 
-    memset(bmap, 0, sizeof(bmap));
-    for (uint i = 0; i < freeblock; i++)
-        bmap[i / 8] |= 1 << (i % 8);
-    write_block(BMAP_START, bmap);
+    for (uint block = 0; block < BMAP_BLOCKS; block++)
+    {
+        uint start = block * BPB;
+        uint end = start + BPB;
+
+        if (end > freeblock)
+            end = freeblock;
+
+        memset(bmap, 0, sizeof(bmap));
+        for (uint i = start; i < end; i++)
+            bmap[(i - start) / 8] |= 1 << ((i - start) % 8);
+        write_block(BMAP_START + block, bmap);
+    }
 }
 
 int main(int argc, char *argv[])

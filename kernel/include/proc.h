@@ -33,6 +33,7 @@
 #define SYS_rename 28
 #define SYS_getcwd 29
 #define SYS_dup2 30
+#define SYS_fcntl 31
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -125,6 +126,8 @@ struct trapframe
   uint64 t4;
   uint64 t5;
   uint64 t6;
+  uint64 f[32];  /* 用户态浮点寄存器 f0-f31 */
+  uint64 fcsr;   /* 用户态浮点控制/状态寄存器 */
 };
 
 /* ================================================================

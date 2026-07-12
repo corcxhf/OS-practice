@@ -274,6 +274,31 @@ static void test_lseek_overwrite(void)
 	expect_str("seek-content", buf, "abZZef");
 }
 
+static void test_lseek_sparse_write(void)
+{
+	const char *path = "fs_sparse";
+	char buf[8];
+	struct stat st;
+	int fd;
+
+	remove(path);
+	fd = open(path, O_RDWR | O_CREAT | O_TRUNC);
+	if (fd < 0) {
+		fail("sparse-open");
+		return;
+	}
+	expect_int("sparse-seek", lseek(fd, 4, SEEK_SET), 4);
+	expect_int("sparse-write", write(fd, "Z", 1), 1);
+	expect_int("sparse-fstat", fstat(fd, &st), 0);
+	expect_file_stat("sparse-size", &st, 5);
+	expect_int("sparse-rewind", lseek(fd, 0, SEEK_SET), 0);
+	memset(buf, 'x', sizeof(buf));
+	expect_int("sparse-read", read(fd, buf, 5), 5);
+	close(fd);
+	if (buf[0] || buf[1] || buf[2] || buf[3] || buf[4] != 'Z')
+		fail("sparse-content");
+}
+
 static void test_independent_open_offsets(void)
 {
 	const char *path = "fs_offset";
@@ -317,6 +342,7 @@ int main(void)
 	test_rename_file();
 	test_dirent_reuse();
 	test_lseek_overwrite();
+	test_lseek_sparse_write();
 	test_independent_open_offsets();
 
 	if (failures) {

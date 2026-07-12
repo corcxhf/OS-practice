@@ -239,7 +239,7 @@ void usertrapret()
   w_sscratch((uint64)p->trapframe);
 
   // 3. 准备好特权级控制寄存器
-  w_sstatus((r_sstatus() & ~SSTATUS_SPP) | SSTATUS_SPIE);
+  w_sstatus((r_sstatus() & ~SSTATUS_SPP) | SSTATUS_SPIE | SSTATUS_FS_DIRTY);
   w_sepc(p->trapframe->epc);
 
   // 4. 冲刷缓存

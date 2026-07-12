@@ -37,6 +37,8 @@ static void test_format_scan(void)
 
 	snprintf(buf, sizeof(buf), "n=%d s=%s", 42, "ok");
 	expect_str("snprintf", buf, "n=42 s=ok");
+	snprintf(buf, sizeof(buf), "[%-7lo][%-10lu]", 0644UL, 123UL);
+	expect_str("snprintf-width-octal", buf, "[644    ][123       ]");
 
 	if (sscanf("17 23 done", "%d %d %s", &a, &b, word) != 3)
 		fail("sscanf-count");
@@ -129,6 +131,9 @@ static void test_lseek_rw(void)
 		fail("open-seek");
 		return;
 	}
+	expect_int("fcntl-getfl", fcntl(fd, F_GETFL) & O_ACCMODE, O_RDWR);
+	expect_int("fcntl-getfd", fcntl(fd, F_GETFD), 0);
+	expect_int("fcntl-setfd", fcntl(fd, F_SETFD, FD_CLOEXEC), 0);
 	expect_int("seek-write", write(fd, "abc", 3), 3);
 	expect_int("seek-set", lseek(fd, 1, SEEK_SET), 1);
 	expect_int("seek-overwrite", write(fd, "Z", 1), 1);
@@ -159,6 +164,15 @@ static void test_malloc_realloc(void)
 	free(q);
 }
 
+static void test_numeric_helpers(void)
+{
+	expect_int("atoi", atoi("42"), 42);
+	expect_int("atol", atol("-12345"), -12345);
+	expect_int("atoll", atoll("67890"), 67890);
+	expect_int("atof", (long)(atof("12.75") * 100), 1275);
+	expect_int("strtol-hex", strtol("0x2a", 0, 0), 42);
+}
+
 int main(void)
 {
 	test_format_scan();
@@ -166,6 +180,7 @@ int main(void)
 	test_stdio_rw();
 	test_lseek_rw();
 	test_malloc_realloc();
+	test_numeric_helpers();
 
 	if (failures) {
 		printf("LIBC_CONTRACT_FAIL %d\n", failures);

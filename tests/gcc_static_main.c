@@ -390,6 +390,7 @@ static void test_posix_host_helpers(void)
 static void test_exec_redirect(void)
 {
     char *child_argv[] = {"/bin/gcc-hello", 0};
+    char *path_argv[] = {"gcc-hello", 0};
     int pid;
     int status = -1;
     char buf[64];
@@ -422,6 +423,35 @@ static void test_exec_redirect(void)
         return;
     }
     expect_str("exec-output", buf, "HELLO_USERLAND\n");
+
+    remove("gs_exec_path");
+    pid = fork();
+    if (pid < 0)
+    {
+        fail("execvp-path-fork");
+        return;
+    }
+
+    if (pid == 0)
+    {
+        int fd;
+
+        close(STDOUT_FILENO);
+        fd = open("gs_exec_path", O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd != STDOUT_FILENO)
+            exit(92);
+        execvp(path_argv[0], path_argv);
+        exit(93);
+    }
+
+    expect_int("execvp-path-wait", waitpid(pid, &status, 0), pid);
+    expect_int("execvp-path-status", status, 0);
+    if (read_file("gs_exec_path", buf, sizeof(buf)) < 0)
+    {
+        fail("execvp-path-output-open");
+        return;
+    }
+    expect_str("execvp-path-output", buf, "HELLO_USERLAND\n");
 }
 
 int main(int argc, char **argv)

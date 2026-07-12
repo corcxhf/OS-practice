@@ -1,0 +1,8 @@
+#define TCC_VERSION "0.9.28-mob"
+#define CONFIG_SYSROOT ""
+#define CONFIG_TCCDIR ""
+#define CONFIG_TCC_CRTPREFIX "/lib"
+#define CONFIG_TCC_LIBPATHS "/lib"
+#define CONFIG_TCC_SYSINCLUDEPATHS "/include"
+#define CONFIG_TCC_SWITCHES "-static"
+#define TCC_LIBTCC1 ""

@@ -16,6 +16,7 @@ extern int *__errno_location(void);
 #define EPERM 1
 #define ENOENT 2
 #define EIO 5
+#define EINTR 4
 #define EAGAIN 11
 #define ENOMEM 12
 #define EEXIST 17
@@ -23,6 +24,8 @@ extern int *__errno_location(void);
 #define EISDIR 21
 #define EINVAL 22
 #define ENOTTY 25
+#define ERANGE 34
+#define EDOM 33
 #define ENOSYS 38
 
 #endif

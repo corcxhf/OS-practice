@@ -38,6 +38,7 @@ extern uint64 sys_ioctl(void);
 extern uint64 sys_rename(void);
 extern uint64 sys_getcwd(void);
 extern uint64 sys_dup2(void);
+extern uint64 sys_fcntl(void);
 // extern uint64 sys_wait(void);
 
 static uint64 (*syscalls[32])(void) = {
@@ -63,6 +64,7 @@ static uint64 (*syscalls[32])(void) = {
     [SYS_rename] = sys_rename,
     [SYS_getcwd] = sys_getcwd,
     [SYS_dup2] = sys_dup2,
+    [SYS_fcntl] = sys_fcntl,
 };
 
 /* ================================================================

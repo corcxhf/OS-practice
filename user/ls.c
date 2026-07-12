@@ -3,11 +3,6 @@
 #include "fs.h"
 #include "types.h"
 
-struct dirent
-{
-    unsigned short inum; // inode 编号
-    char name[14];       // 文件名
-};
 int str_len(const char *s);
 static inline uint64 syscall(uint64 n, uint64 a0, uint64 a1, uint64 a2);
 

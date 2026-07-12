@@ -23,6 +23,7 @@ typedef unsigned int uint;
 #define SYS_rename 28
 #define SYS_getcwd 29
 #define SYS_dup2 30
+#define SYS_fcntl 31
 #define SYS_fork 1
 #define SYS_wait 3
 #define SYS_exec 13
@@ -36,8 +37,16 @@ typedef unsigned int uint;
 #define O_TRUNC 0x400
 #define O_EXCL 0x800
 #define O_APPEND 0x1000
+#define O_ACCMODE 3
+#define O_BINARY 0
+#define F_DUPFD 0
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_GETFL 3
+#define F_SETFL 4
 #define AT_FDCWD -100
 #define _SC_PAGESIZE 30
+#define F_OK 0
 #define R_OK 4
 
 #define SEEK_SET 0
@@ -57,6 +66,8 @@ typedef struct FILE
     int fd;
     int eof;
     int err;
+    int has_unget;
+    unsigned char unget;
     int unlink_on_close;
     char unlink_path[128];
 } FILE;
@@ -94,7 +105,11 @@ struct stat
     short st_mode;
     short st_nlink;
     long st_size;
+    long st_atime;
     long st_mtime;
+    long st_ctime;
+    unsigned int st_uid;
+    unsigned int st_gid;
 };
 
 struct termios
@@ -106,16 +121,99 @@ struct termios
     unsigned char c_cc[32];
 };
 
+struct timeval
+{
+    long tv_sec;
+    long tv_usec;
+};
+
+struct timezone
+{
+    int tz_minuteswest;
+    int tz_dsttime;
+};
+
+struct utimbuf
+{
+    long actime;
+    long modtime;
+};
+
+struct tm
+{
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+};
+
+struct rusage
+{
+    struct timeval ru_utime;
+    struct timeval ru_stime;
+};
+
+struct rlimit
+{
+    unsigned long rlim_cur;
+    unsigned long rlim_max;
+};
+
+struct lconv
+{
+    char *decimal_point;
+    char *thousands_sep;
+    char *grouping;
+    char *int_curr_symbol;
+    char *currency_symbol;
+    char *mon_decimal_point;
+    char *mon_thousands_sep;
+    char *mon_grouping;
+    char *positive_sign;
+    char *negative_sign;
+    char int_frac_digits;
+    char frac_digits;
+    char p_cs_precedes;
+    char p_sep_by_space;
+    char n_cs_precedes;
+    char n_sep_by_space;
+    char p_sign_posn;
+    char n_sign_posn;
+    char int_p_cs_precedes;
+    char int_p_sep_by_space;
+    char int_n_cs_precedes;
+    char int_n_sep_by_space;
+    char int_p_sign_posn;
+    char int_n_sign_posn;
+};
+
 void free(void *ptr);
 void *malloc(size_t nbytes);
 void *realloc(void *ptr, size_t nbytes);
 long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);
+long time(long *tloc);
+char *getenv(const char *name);
 void *memset(void *dst, int c, size_t n);
+void *memcpy(void *dst, const void *src, size_t n);
 char *strchr(const char *s, int c);
 char *strcpy(char *dst, const char *src);
 int strncmp(const char *a, const char *b, size_t n);
 size_t strlen(const char *s);
+int tolower(int c);
+double frexp(double x, int *exp);
+double ldexp(double x, int exp);
 static char *copy_cstr(char *dst, size_t cap, const char *src);
+
+char *optarg __attribute__((weak));
+int optind __attribute__((weak)) = 1;
+int opterr __attribute__((weak)) = 1;
+int optopt __attribute__((weak));
 
 static char *env_store[ENV_MAX];
 char **environ = env_store;
@@ -157,6 +255,11 @@ void exit(int status)
     syscall(SYS_exit, (uint64)status, 0, 0);
     for (;;)
         ;
+}
+
+void _exit(int status)
+{
+    exit(status);
 }
 
 void *sbrk(long increment)
@@ -234,6 +337,11 @@ int unlink(const char *pathname)
     return (int)syscall(SYS_unlink, (uint64)pathname, 0, 0);
 }
 
+int rmdir(const char *pathname)
+{
+    return unlink(pathname);
+}
+
 int remove(const char *pathname)
 {
     return unlink(pathname);
@@ -249,9 +357,18 @@ int fstat(int fd, struct stat *st)
     int ret;
     if (!st)
         return -1;
+    memset(st, 0, sizeof(*st));
     ret = (int)syscall(SYS_fstat, (uint64)fd, (uint64)st, 0);
     if (ret < 0)
         errno_value = 5;
+    else
+    {
+        st->st_atime = 1;
+        st->st_mtime = 1;
+        st->st_ctime = 1;
+        st->st_uid = 0;
+        st->st_gid = 0;
+    }
     return ret;
 }
 
@@ -322,6 +439,16 @@ int getpid(void)
     return (int)syscall(11, 0, 0, 0);
 }
 
+unsigned int getuid(void)
+{
+    return 0;
+}
+
+unsigned int getgid(void)
+{
+    return 0;
+}
+
 int fork(void)
 {
     return (int)syscall(SYS_fork, 0, 0, 0);
@@ -339,6 +466,11 @@ int waitpid(int pid, int *status, int options)
     return (int)syscall(SYS_wait, (uint64)status, 0, 0);
 }
 
+int wait(int *status)
+{
+    return waitpid(-1, status, 0);
+}
+
 int kill(int pid, int sig)
 {
     (void)pid;
@@ -346,14 +478,71 @@ int kill(int pid, int sig)
     return -1;
 }
 
+unsigned int sleep(unsigned int seconds)
+{
+    return seconds;
+}
+
 int execvp(const char *file, char *const argv[])
 {
-    return (int)syscall(SYS_exec, (uint64)file, (uint64)argv, (uint64)environ);
+    char path[128];
+    const char *env_path;
+    int has_slash = 0;
+
+    if (!file || !*file)
+    {
+        errno_value = 2;
+        return -1;
+    }
+
+    for (const char *p = file; *p; p++)
+        if (*p == '/')
+            has_slash = 1;
+    if (has_slash)
+        return (int)syscall(SYS_exec, (uint64)file, (uint64)argv, (uint64)environ);
+
+    env_path = getenv("PATH");
+    if (!env_path || !*env_path)
+        env_path = "/bin:/";
+
+    while (*env_path)
+    {
+        int dir_len = 0;
+        int n = 0;
+
+        while (env_path[dir_len] && env_path[dir_len] != ':')
+            dir_len++;
+
+        if (dir_len == 0)
+        {
+            path[n++] = '.';
+        }
+        else
+        {
+            for (int i = 0; i < dir_len && n < (int)sizeof(path) - 1; i++)
+                path[n++] = env_path[i];
+        }
+        if (n > 0 && path[n - 1] != '/' && n < (int)sizeof(path) - 1)
+            path[n++] = '/';
+        for (int i = 0; file[i] && n < (int)sizeof(path) - 1; i++)
+            path[n++] = file[i];
+        path[n] = '\0';
+
+        if (n < (int)sizeof(path) - 1)
+            syscall(SYS_exec, (uint64)path, (uint64)argv, (uint64)environ);
+
+        env_path += dir_len;
+        if (*env_path == ':')
+            env_path++;
+    }
+
+    errno_value = 2;
+    return -1;
 }
 
 int execv(const char *path, char *const argv[])
 {
-    return execvp(path, argv);
+    return (int)syscall(SYS_exec, (uint64)path, (uint64)argv, (uint64)environ);
 }
 
 int execve(const char *path, char *const argv[], char *const envp[])
@@ -383,9 +572,21 @@ int fstatat(int dirfd, const char *pathname, struct stat *st, int flags)
 
 int fcntl(int fd, int cmd, ...)
 {
-    (void)fd;
-    (void)cmd;
-    return 0;
+    va_list ap;
+    uint64 arg = 0;
+    int ret;
+
+    if (cmd == F_DUPFD || cmd == F_SETFD || cmd == F_SETFL)
+    {
+        va_start(ap, cmd);
+        arg = (uint64)va_arg(ap, int);
+        va_end(ap);
+    }
+
+    ret = (int)syscall(SYS_fcntl, (uint64)fd, (uint64)cmd, arg);
+    if (ret < 0)
+        errno_value = 22;
+    return ret;
 }
 
 int chmod(const char *path, mode_t mode)
@@ -400,6 +601,12 @@ int fchmod(int fd, mode_t mode)
     (void)fd;
     (void)mode;
     return 0;
+}
+
+int utime(const char *filename, const struct utimbuf *times)
+{
+    (void)times;
+    return access(filename, F_OK);
 }
 
 mode_t umask(mode_t mode)
@@ -425,6 +632,14 @@ size_t strlen(const char *s)
     return n;
 }
 
+size_t strnlen(const char *s, size_t maxlen)
+{
+    size_t n = 0;
+    while (n < maxlen && s && s[n])
+        n++;
+    return n;
+}
+
 int strcmp(const char *a, const char *b)
 {
     while (*a && *a == *b)
@@ -444,6 +659,46 @@ int strncmp(const char *a, const char *b, size_t n)
         n--;
     }
     return n == 0 ? 0 : *(const unsigned char *)a - *(const unsigned char *)b;
+}
+
+int strcoll(const char *a, const char *b)
+{
+    return strcmp(a, b);
+}
+
+size_t strxfrm(char *dst, const char *src, size_t n)
+{
+    size_t len = strlen(src);
+    size_t copy = len;
+
+    if (n == 0)
+        return len;
+    if (copy >= n)
+        copy = n - 1;
+    memcpy(dst, src, copy);
+    dst[copy] = '\0';
+    return len;
+}
+
+int strcasecmp(const char *a, const char *b)
+{
+    while (*a && tolower((unsigned char)*a) == tolower((unsigned char)*b))
+    {
+        a++;
+        b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
+
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+    while (n > 0 && *a && tolower((unsigned char)*a) == tolower((unsigned char)*b))
+    {
+        a++;
+        b++;
+        n--;
+    }
+    return n == 0 ? 0 : tolower((unsigned char)*a) - tolower((unsigned char)*b);
 }
 
 char *strcpy(char *dst, const char *src)
@@ -482,10 +737,107 @@ char *strncpy(char *dst, const char *src, size_t n)
     return ret;
 }
 
+char *stpcpy(char *dst, const char *src)
+{
+    while ((*dst = *src) != '\0')
+    {
+        dst++;
+        src++;
+    }
+    return dst;
+}
+
+char *stpncpy(char *dst, const char *src, size_t n)
+{
+    char *p = dst;
+    while (n > 0 && *src)
+    {
+        *p++ = *src++;
+        n--;
+    }
+    while (n > 0)
+    {
+        *p++ = '\0';
+        n--;
+    }
+    return p;
+}
+
+char *strdup(const char *s)
+{
+    size_t n = strlen(s) + 1;
+    char *p = malloc(n);
+    if (!p)
+        return NULL;
+    memcpy(p, s, n);
+    return p;
+}
+
+char *strndup(const char *s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char *p = malloc(len + 1);
+    if (!p)
+        return NULL;
+    memcpy(p, s, len);
+    p[len] = '\0';
+    return p;
+}
+
 char *strcat(char *dst, const char *src)
 {
     strcpy(dst + strlen(dst), src);
     return dst;
+}
+
+char *strncat(char *dst, const char *src, size_t n)
+{
+    char *p = dst + strlen(dst);
+    while (n > 0 && *src)
+    {
+        *p++ = *src++;
+        n--;
+    }
+    *p = '\0';
+    return dst;
+}
+
+static int char_in_set(int c, const char *set)
+{
+    while (*set)
+    {
+        if ((unsigned char)*set == (unsigned char)c)
+            return 1;
+        set++;
+    }
+    return 0;
+}
+
+size_t strspn(const char *s, const char *accept)
+{
+    size_t n = 0;
+    while (s[n] && char_in_set(s[n], accept))
+        n++;
+    return n;
+}
+
+size_t strcspn(const char *s, const char *reject)
+{
+    size_t n = 0;
+    while (s[n] && !char_in_set(s[n], reject))
+        n++;
+    return n;
+}
+
+char *strpbrk(const char *s, const char *accept)
+{
+    while (*s)
+    {
+        if (char_in_set(*s, accept))
+            return (char *)s;
+        s++;
+    }
+    return NULL;
 }
 
 char *strchr(const char *s, int c)
@@ -546,6 +898,12 @@ void *memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+void *mempcpy(void *dst, const void *src, size_t n)
+{
+    memcpy(dst, src, n);
+    return (char *)dst + n;
+}
+
 void *memmove(void *dst, const void *src, size_t n)
 {
     unsigned char *d = dst;
@@ -589,6 +947,45 @@ int memcmp(const void *a, const void *b, size_t n)
         q++;
     }
     return 0;
+}
+
+int bcmp(const void *a, const void *b, size_t n)
+{
+    return memcmp(a, b, n);
+}
+
+void bcopy(const void *src, void *dst, size_t n)
+{
+    memmove(dst, src, n);
+}
+
+void bzero(void *s, size_t n)
+{
+    memset(s, 0, n);
+}
+
+int ffs(int i)
+{
+    if (i == 0)
+        return 0;
+    int bit = 1;
+    unsigned int x = (unsigned int)i;
+    while ((x & 1U) == 0)
+    {
+        x >>= 1;
+        bit++;
+    }
+    return bit;
+}
+
+char *index(const char *s, int c)
+{
+    return strchr(s, c);
+}
+
+char *rindex(const char *s, int c)
+{
+    return strrchr(s, c);
 }
 
 typedef long Align;
@@ -749,9 +1146,9 @@ void *realloc(void *ptr, size_t nbytes)
 }
 
 static FILE std_files[3] = {
-    {0, 0, 0, 0, {0}},
-    {1, 0, 0, 0, {0}},
-    {2, 0, 0, 0, {0}},
+    {0, 0, 0, 0, 0, 0, {0}},
+    {1, 0, 0, 0, 0, 0, {0}},
+    {2, 0, 0, 0, 0, 0, {0}},
 };
 
 FILE *stdin = &std_files[0];
@@ -795,6 +1192,8 @@ FILE *fopen(const char *filename, const char *mode)
     f->fd = fd;
     f->eof = 0;
     f->err = 0;
+    f->has_unget = 0;
+    f->unget = 0;
     f->unlink_on_close = 0;
     f->unlink_path[0] = 0;
     return f;
@@ -812,6 +1211,8 @@ FILE *fdopen(int fd, const char *mode)
     f->fd = fd;
     f->eof = 0;
     f->err = 0;
+    f->has_unget = 0;
+    f->unget = 0;
     f->unlink_on_close = 0;
     f->unlink_path[0] = 0;
     return f;
@@ -917,21 +1318,36 @@ int fclose(FILE *stream)
     return ret;
 }
 
+int fileno(FILE *stream)
+{
+    return stream ? stream->fd : -1;
+}
+
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
 {
     ssize_t ret;
     size_t bytes = size * nmemb;
+    unsigned char *out = ptr;
+    size_t done = 0;
     if (bytes == 0)
         return 0;
-    ret = read(stream->fd, ptr, bytes);
+    if (stream->has_unget)
+    {
+        out[done++] = stream->unget;
+        stream->has_unget = 0;
+        if (done == bytes)
+            return done / size;
+    }
+    ret = read(stream->fd, out + done, bytes - done);
     if (ret < 0)
     {
         stream->err = 1;
         return 0;
     }
-    if ((size_t)ret < bytes)
+    done += (size_t)ret;
+    if (done < bytes)
         stream->eof = 1;
-    return (size_t)ret / size;
+    return done / size;
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
@@ -953,6 +1369,11 @@ int fgetc(FILE *stream)
 {
     unsigned char ch;
     ssize_t ret = read(stream->fd, &ch, 1);
+    if (stream->has_unget)
+    {
+        stream->has_unget = 0;
+        return stream->unget;
+    }
     if (ret == 1)
     {
         if (stream == stdin && (tty_lflag & ECHO))
@@ -974,6 +1395,37 @@ int getc(FILE *stream)
 int getchar(void)
 {
     return fgetc(stdin);
+}
+
+char *fgets(char *s, int size, FILE *stream)
+{
+    int i = 0;
+
+    if (!s || size <= 0)
+        return NULL;
+    while (i + 1 < size)
+    {
+        int c = fgetc(stream);
+        if (c == EOF)
+            break;
+        s[i++] = (char)c;
+        if (c == '\n')
+            break;
+    }
+    if (i == 0)
+        return NULL;
+    s[i] = '\0';
+    return s;
+}
+
+int ungetc(int c, FILE *stream)
+{
+    if (!stream || c == EOF || stream->has_unget)
+        return EOF;
+    stream->has_unget = 1;
+    stream->unget = (unsigned char)c;
+    stream->eof = 0;
+    return c;
 }
 
 int fputc(int c, FILE *stream)
@@ -1112,28 +1564,47 @@ static void out_str(char **buf, size_t *left, int *count, const char *s)
         out_char(buf, left, count, *s++);
 }
 
-static void out_uint(char **buf, size_t *left, int *count, unsigned long x, int base, int neg)
+static void out_repeat(char **buf, size_t *left, int *count, int c, int n)
+{
+    while (n-- > 0)
+        out_char(buf, left, count, c);
+}
+
+static void out_uint(char **buf, size_t *left, int *count, unsigned long x, int base,
+                     int neg, int left_align, int pad_zero, int width)
 {
     char tmp[32];
     int n = 0;
-
-    if (neg)
-        out_char(buf, left, count, '-');
+    int len;
+    int pad;
 
     if (x == 0)
     {
-        out_char(buf, left, count, '0');
-        return;
+        tmp[n++] = '0';
+    }
+    else
+    {
+        while (x)
+        {
+            int digit = x % (unsigned long)base;
+            tmp[n++] = digit < 10 ? '0' + digit : 'a' + digit - 10;
+            x /= (unsigned long)base;
+        }
     }
 
-    while (x)
-    {
-        int digit = x % (unsigned long)base;
-        tmp[n++] = digit < 10 ? '0' + digit : 'a' + digit - 10;
-        x /= (unsigned long)base;
-    }
+    len = n + (neg ? 1 : 0);
+    pad = width > len ? width - len : 0;
+
+    if (!left_align && !pad_zero)
+        out_repeat(buf, left, count, ' ', pad);
+    if (neg)
+        out_char(buf, left, count, '-');
+    if (!left_align && pad_zero)
+        out_repeat(buf, left, count, '0', pad);
     while (n--)
         out_char(buf, left, count, tmp[n]);
+    if (left_align)
+        out_repeat(buf, left, count, ' ', pad);
 }
 
 int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
@@ -1152,6 +1623,9 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
     while (*fmt)
     {
         int long_arg = 0;
+        int left_align = 0;
+        int pad_zero = 0;
+        int width = 0;
         if (*fmt != '%')
         {
             out_char(&out, &left, &count, *fmt++);
@@ -1159,8 +1633,19 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
         }
 
         fmt++;
-        while (*fmt >= '0' && *fmt <= '9')
+        while (*fmt == '-' || *fmt == '+' || *fmt == ' ' || *fmt == '#' || *fmt == '0')
+        {
+            if (*fmt == '-')
+                left_align = 1;
+            else if (*fmt == '0')
+                pad_zero = 1;
             fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9')
+        {
+            width = width * 10 + (*fmt - '0');
+            fmt++;
+        }
         if (*fmt == '.')
         {
             fmt++;
@@ -1185,22 +1670,27 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
         {
             long v = long_arg ? va_arg(ap, long) : va_arg(ap, int);
             unsigned long x = v < 0 ? (unsigned long)-v : (unsigned long)v;
-            out_uint(&out, &left, &count, x, 10, v < 0);
+            out_uint(&out, &left, &count, x, 10, v < 0, left_align, pad_zero, width);
         }
         else if (*fmt == 'u')
         {
             unsigned long x = long_arg ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-            out_uint(&out, &left, &count, x, 10, 0);
+            out_uint(&out, &left, &count, x, 10, 0, left_align, pad_zero, width);
         }
         else if (*fmt == 'x' || *fmt == 'X')
         {
             unsigned long x = long_arg ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-            out_uint(&out, &left, &count, x, 16, 0);
+            out_uint(&out, &left, &count, x, 16, 0, left_align, pad_zero, width);
+        }
+        else if (*fmt == 'o')
+        {
+            unsigned long x = long_arg ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            out_uint(&out, &left, &count, x, 8, 0, left_align, pad_zero, width);
         }
         else if (*fmt == 'p')
         {
             out_str(&out, &left, &count, "0x");
-            out_uint(&out, &left, &count, (unsigned long)va_arg(ap, void *), 16, 0);
+            out_uint(&out, &left, &count, (unsigned long)va_arg(ap, void *), 16, 0, 0, 0, 0);
         }
         else if (*fmt == '%')
         {
@@ -1247,6 +1737,44 @@ int sprintf(char *str, const char *fmt, ...)
     return ret;
 }
 
+int vsprintf(char *str, const char *fmt, va_list ap)
+{
+    return vsnprintf(str, (size_t)-1, fmt, ap);
+}
+
+int __attribute__((weak)) vasprintf(char **strp, const char *fmt, va_list ap)
+{
+    va_list copy;
+    int len;
+    char *buf;
+
+    va_copy(copy, ap);
+    len = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (len < 0)
+        return -1;
+    buf = malloc((size_t)len + 1);
+    if (!buf)
+    {
+        errno_value = 12;
+        return -1;
+    }
+    vsnprintf(buf, (size_t)len + 1, fmt, ap);
+    *strp = buf;
+    return len;
+}
+
+int __attribute__((weak)) asprintf(char **strp, const char *fmt, ...)
+{
+    int ret;
+    va_list ap;
+
+    va_start(ap, fmt);
+    ret = vasprintf(strp, fmt, ap);
+    va_end(ap);
+    return ret;
+}
+
 int vfprintf(FILE *stream, const char *fmt, va_list ap)
 {
     char buf[1024];
@@ -1263,6 +1791,11 @@ int fprintf(FILE *stream, const char *fmt, ...)
     ret = vfprintf(stream, fmt, ap);
     va_end(ap);
     return ret;
+}
+
+int vprintf(const char *fmt, va_list ap)
+{
+    return vfprintf(stdout, fmt, ap);
 }
 
 int printf(const char *fmt, ...)
@@ -1304,19 +1837,71 @@ static int vscan_string(const char *str, const char *fmt, va_list ap)
         }
 
         fmt++;
-        if (*fmt == 'd')
+        int assign = 1;
+        int length = 0;
+        if (*fmt == '*')
         {
-            int *out = va_arg(ap, int *);
+            assign = 0;
+            fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9')
+            fmt++;
+        if (*fmt == 'h')
+        {
+            fmt++;
+            length = -1;
+            if (*fmt == 'h')
+            {
+                fmt++;
+                length = -2;
+            }
+        }
+        else if (*fmt == 'l')
+        {
+            fmt++;
+            length = 1;
+            if (*fmt == 'l')
+            {
+                fmt++;
+                length = 2;
+            }
+        }
+        else if (*fmt == 'j' || *fmt == 'z' || *fmt == 't')
+        {
+            fmt++;
+            length = 1;
+        }
+        if (*fmt == 'd' || *fmt == 'i' || *fmt == 'u' || *fmt == 'o' || *fmt == 'x' || *fmt == 'X')
+        {
+            void *out = assign ? va_arg(ap, void *) : NULL;
             char *end;
-            long v;
+            int base = 10;
+            unsigned long v;
+            int is_signed = *fmt == 'd' || *fmt == 'i';
             while (scan_space((unsigned char)*str))
                 str++;
-            v = strtol(str, &end, 10);
+            if (*fmt == 'o')
+                base = 8;
+            else if (*fmt == 'x' || *fmt == 'X')
+                base = 16;
+            else if (*fmt == 'i')
+                base = 0;
+            v = is_signed ? (unsigned long)strtol(str, &end, base) : strtoul(str, &end, base);
             if (end == str)
                 break;
-            *out = (int)v;
+            if (assign)
+            {
+                if (length >= 1)
+                    *(unsigned long *)out = v;
+                else if (length == -1)
+                    *(unsigned short *)out = (unsigned short)v;
+                else if (length == -2)
+                    *(unsigned char *)out = (unsigned char)v;
+                else
+                    *(unsigned int *)out = (unsigned int)v;
+                count++;
+            }
             str = end;
-            count++;
         }
         else if (*fmt == 's')
         {
@@ -1453,9 +2038,106 @@ unsigned long strtoul(const char *nptr, char **endptr, int base)
     return (unsigned long)strtol(nptr, endptr, base);
 }
 
+long long strtoll(const char *nptr, char **endptr, int base)
+{
+    return (long long)strtol(nptr, endptr, base);
+}
+
+unsigned long long strtoull(const char *nptr, char **endptr, int base)
+{
+    return (unsigned long long)strtoul(nptr, endptr, base);
+}
+
+double strtod(const char *nptr, char **endptr)
+{
+    char *parse_end;
+    long whole = strtol(nptr, &parse_end, 10);
+    double value = (double)whole;
+    const char *p = parse_end;
+    double place = 0.1;
+    int neg = nptr && *nptr == '-';
+
+    if (*p == '.')
+    {
+        p++;
+        while (*p >= '0' && *p <= '9')
+        {
+            if (neg)
+                value -= (*p - '0') * place;
+            else
+                value += (*p - '0') * place;
+            place *= 0.1;
+            p++;
+        }
+    }
+    if (endptr)
+        *endptr = (char *)p;
+    return value;
+}
+
+float strtof(const char *nptr, char **endptr)
+{
+    return (float)strtod(nptr, endptr);
+}
+
+long double strtold(const char *nptr, char **endptr)
+{
+    (void)strtod(nptr, endptr);
+    return 0.0L;
+}
+
+double atof(const char *nptr)
+{
+    return strtod(nptr, NULL);
+}
+
+long strtoimax(const char *nptr, char **endptr, int base)
+{
+    return strtol(nptr, endptr, base);
+}
+
+unsigned long strtoumax(const char *nptr, char **endptr, int base)
+{
+    return strtoul(nptr, endptr, base);
+}
+
+struct imaxdiv_result
+{
+    long quot;
+    long rem;
+};
+
+struct imaxdiv_result imaxdiv(long numer, long denom)
+{
+    struct imaxdiv_result result;
+    result.quot = numer / denom;
+    result.rem = numer % denom;
+    return result;
+}
+
 int atoi(const char *s)
 {
     return (int)strtol(s, NULL, 10);
+}
+
+long atol(const char *s)
+{
+    return strtol(s, NULL, 10);
+}
+
+long long atoll(const char *s)
+{
+    return strtoll(s, NULL, 10);
+}
+
+int abs(int x)
+{
+    return x < 0 ? -x : x;
+}
+
+long labs(long x)
+{
+    return x < 0 ? -x : x;
 }
 
 char *getenv(const char *name)
@@ -1662,9 +2344,202 @@ long sysconf(int name)
     return -1;
 }
 
+char *setlocale(int category, const char *locale)
+{
+    static char c_locale[] = "C";
+    (void)category;
+
+    if (!locale || locale[0] == '\0' || strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0)
+        return c_locale;
+    return NULL;
+}
+
+struct lconv *localeconv(void)
+{
+    static char dot[] = ".";
+    static char empty[] = "";
+    static struct lconv c_lconv = {
+        dot,
+        empty,
+        empty,
+        empty,
+        empty,
+        empty,
+        empty,
+        empty,
+        empty,
+        empty,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+        127,
+    };
+
+    return &c_lconv;
+}
+
+long pathconf(const char *path, int name)
+{
+    (void)path;
+    if (name == 4)
+        return 128;
+    errno_value = 22;
+    return -1;
+}
+
 int getpagesize(void)
 {
     return 4096;
+}
+
+int gettimeofday(struct timeval *tv, void *tz)
+{
+    if (tv)
+    {
+        tv->tv_sec = time(NULL);
+        tv->tv_usec = 0;
+    }
+    if (tz)
+    {
+        struct timezone *zone = tz;
+        zone->tz_minuteswest = 0;
+        zone->tz_dsttime = 0;
+    }
+    return 0;
+}
+
+int getrusage(int who, struct rusage *usage)
+{
+    (void)who;
+    if (usage)
+        memset(usage, 0, sizeof(*usage));
+    return 0;
+}
+
+int getrlimit(int resource, struct rlimit *rlim)
+{
+    (void)resource;
+    if (rlim)
+    {
+        rlim->rlim_cur = (unsigned long)-1;
+        rlim->rlim_max = (unsigned long)-1;
+    }
+    return 0;
+}
+
+int setrlimit(int resource, const struct rlimit *rlim)
+{
+    (void)resource;
+    (void)rlim;
+    return 0;
+}
+
+void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset)
+{
+    void *p;
+    (void)addr;
+    (void)prot;
+    (void)flags;
+    (void)fd;
+    (void)offset;
+    p = malloc(length ? length : 1);
+    return p ? p : (void *)-1;
+}
+
+int munmap(void *addr, size_t length)
+{
+    (void)length;
+    if (addr && addr != (void *)-1)
+        free(addr);
+    return 0;
+}
+
+static unsigned long rand_state = 1;
+
+void srand(unsigned int seed)
+{
+    rand_state = seed ? seed : 1;
+}
+
+int rand(void)
+{
+    rand_state = rand_state * 1103515245UL + 12345UL;
+    return (int)((rand_state >> 16) & 0x7fff);
+}
+
+int isnan(double x)
+{
+    return __builtin_isnan(x);
+}
+
+int isinf(double x)
+{
+    return __builtin_isinf(x);
+}
+
+int finite(double x)
+{
+    return __builtin_isfinite(x);
+}
+
+double fabs(double x)
+{
+    return x < 0.0 ? -x : x;
+}
+
+double frexp(double x, int *exp)
+{
+    int e = 0;
+    double ax;
+
+    if (x == 0.0 || isnan(x) || isinf(x))
+    {
+        if (exp)
+            *exp = 0;
+        return x;
+    }
+
+    ax = fabs(x);
+    while (ax >= 1.0)
+    {
+        x *= 0.5;
+        ax *= 0.5;
+        e++;
+    }
+    while (ax < 0.5)
+    {
+        x *= 2.0;
+        ax *= 2.0;
+        e--;
+    }
+    if (exp)
+        *exp = e;
+    return x;
+}
+
+double ldexp(double x, int exp)
+{
+    if (exp > 0)
+    {
+        while (exp--)
+            x *= 2.0;
+    }
+    else
+    {
+        while (exp++)
+            x *= 0.5;
+    }
+    return x;
 }
 
 void abort(void)
@@ -1672,11 +2547,142 @@ void abort(void)
     exit(134);
 }
 
+int __attribute__((weak)) getopt(int argc, char *const argv[], const char *optstring)
+{
+    static int optpos = 1;
+    const char *match;
+    char opt;
+
+    if (optind <= 0)
+        optind = 1;
+    if (optind >= argc || !argv[optind] || argv[optind][0] != '-' || argv[optind][1] == '\0')
+        return -1;
+    if (strcmp(argv[optind], "--") == 0)
+    {
+        optind++;
+        return -1;
+    }
+
+    opt = argv[optind][optpos++];
+    optopt = opt;
+    match = strchr(optstring, opt);
+    if (!match || opt == ':')
+    {
+        if (argv[optind][optpos] == '\0')
+        {
+            optind++;
+            optpos = 1;
+        }
+        return '?';
+    }
+
+    if (match[1] == ':')
+    {
+        if (argv[optind][optpos] != '\0')
+        {
+            optarg = &argv[optind][optpos];
+            optind++;
+            optpos = 1;
+        }
+        else if (optind + 1 < argc)
+        {
+            optarg = argv[++optind];
+            optind++;
+            optpos = 1;
+        }
+        else
+        {
+            return optstring[0] == ':' ? ':' : '?';
+        }
+    }
+    else
+    {
+        optarg = NULL;
+        if (argv[optind][optpos] == '\0')
+        {
+            optind++;
+            optpos = 1;
+        }
+    }
+    return opt;
+}
+
 long time(long *tloc)
 {
     if (tloc)
         *tloc = 2026;
     return 2026;
+}
+
+long clock(void)
+{
+    return 0;
+}
+
+static struct tm *epoch_tm(void)
+{
+    static struct tm tm;
+
+    tm.tm_sec = 0;
+    tm.tm_min = 0;
+    tm.tm_hour = 0;
+    tm.tm_mday = 1;
+    tm.tm_mon = 0;
+    tm.tm_year = 70;
+    tm.tm_wday = 4;
+    tm.tm_yday = 0;
+    tm.tm_isdst = 0;
+    return &tm;
+}
+
+char *ctime(const long *timep)
+{
+    static char text[] = "Thu Jan  1 00:00:00 1970\n";
+    (void)timep;
+    return text;
+}
+
+struct tm *localtime(const long *timep)
+{
+    (void)timep;
+    return epoch_tm();
+}
+
+struct tm *gmtime(const long *timep)
+{
+    (void)timep;
+    return epoch_tm();
+}
+
+long mktime(struct tm *tm)
+{
+    (void)tm;
+    return 0;
+}
+
+double difftime(long time1, long time0)
+{
+    return (double)(time1 - time0);
+}
+
+size_t strftime(char *s, size_t max, const char *format, const struct tm *tm)
+{
+    const char *stamp = "1970-01-01T00:00:00.000+0000";
+    size_t n;
+    (void)format;
+    (void)tm;
+
+    n = strlen(stamp);
+    if (max == 0)
+        return 0;
+    if (n >= max)
+    {
+        if (s)
+            s[0] = '\0';
+        return 0;
+    }
+    memcpy(s, stamp, n + 1);
+    return n;
 }
 
 int atexit(void (*function)(void))
@@ -1769,9 +2775,29 @@ int isspace(int c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
 
+int isblank(int c)
+{
+    return c == ' ' || c == '\t';
+}
+
 int isprint(int c)
 {
     return c >= 32 && c < 127;
+}
+
+int isgraph(int c)
+{
+    return c > 32 && c < 127;
+}
+
+int ispunct(int c)
+{
+    return isgraph(c) && !isalnum(c);
+}
+
+int isxdigit(int c)
+{
+    return isdigit(c) || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
 }
 
 int tolower(int c)
@@ -1782,6 +2808,238 @@ int tolower(int c)
 int toupper(int c)
 {
     return c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c;
+}
+
+size_t mbstowcs(int *dest, const char *src, size_t n)
+{
+    size_t len = 0;
+
+    if (!src)
+        return (size_t)-1;
+    if (!dest)
+    {
+        while (src[len])
+            len++;
+        return len;
+    }
+    while (len < n && src[len])
+    {
+        dest[len] = (unsigned char)src[len];
+        len++;
+    }
+    if (len < n)
+        dest[len] = 0;
+    return len;
+}
+
+size_t wcstombs(char *dest, const int *src, size_t n)
+{
+    size_t len = 0;
+
+    if (!src)
+        return (size_t)-1;
+    if (!dest)
+    {
+        while (src[len])
+            len++;
+        return len;
+    }
+    while (len < n && src[len])
+    {
+        int c = src[len];
+        dest[len] = (c >= 0 && c <= 255) ? (char)c : '?';
+        len++;
+    }
+    if (len < n)
+        dest[len] = '\0';
+    return len;
+}
+
+size_t wcslen(const int *s)
+{
+    size_t n = 0;
+    while (s && s[n])
+        n++;
+    return n;
+}
+
+int wcscoll(const int *a, const int *b)
+{
+    while (*a && *a == *b)
+    {
+        a++;
+        b++;
+    }
+    return *a - *b;
+}
+
+size_t mbrtowc(int *pwc, const char *s, size_t n, void *ps)
+{
+    (void)ps;
+    if (!s)
+        return 0;
+    if (n == 0)
+        return (size_t)-2;
+    if (*s == '\0')
+    {
+        if (pwc)
+            *pwc = 0;
+        return 0;
+    }
+    if (pwc)
+        *pwc = (unsigned char)*s;
+    return 1;
+}
+
+size_t wcrtomb(char *s, int wc, void *ps)
+{
+    (void)ps;
+    if (!s)
+        return 1;
+    *s = (wc >= 0 && wc <= 255) ? (char)wc : '?';
+    return 1;
+}
+
+int btowc(int c)
+{
+    return c == EOF ? -1 : (unsigned char)c;
+}
+
+int wctob(int c)
+{
+    return (c >= 0 && c <= 255) ? c : EOF;
+}
+
+int iswalnum(int c)
+{
+    return isalnum(c);
+}
+
+int iswalpha(int c)
+{
+    return isalpha(c);
+}
+
+int iswblank(int c)
+{
+    return isblank(c);
+}
+
+int iswcntrl(int c)
+{
+    return iscntrl(c);
+}
+
+int iswdigit(int c)
+{
+    return isdigit(c);
+}
+
+int iswgraph(int c)
+{
+    return isgraph(c);
+}
+
+int iswlower(int c)
+{
+    return islower(c);
+}
+
+int iswprint(int c)
+{
+    return isprint(c);
+}
+
+int iswpunct(int c)
+{
+    return ispunct(c);
+}
+
+int iswspace(int c)
+{
+    return isspace(c);
+}
+
+int iswupper(int c)
+{
+    return isupper(c);
+}
+
+int iswxdigit(int c)
+{
+    return isxdigit(c);
+}
+
+int towlower(int c)
+{
+    return tolower(c);
+}
+
+int towupper(int c)
+{
+    return toupper(c);
+}
+
+unsigned long wctype(const char *property)
+{
+    if (strcmp(property, "alnum") == 0)
+        return 1;
+    if (strcmp(property, "alpha") == 0)
+        return 2;
+    if (strcmp(property, "blank") == 0)
+        return 3;
+    if (strcmp(property, "cntrl") == 0)
+        return 4;
+    if (strcmp(property, "digit") == 0)
+        return 5;
+    if (strcmp(property, "graph") == 0)
+        return 6;
+    if (strcmp(property, "lower") == 0)
+        return 7;
+    if (strcmp(property, "print") == 0)
+        return 8;
+    if (strcmp(property, "punct") == 0)
+        return 9;
+    if (strcmp(property, "space") == 0)
+        return 10;
+    if (strcmp(property, "upper") == 0)
+        return 11;
+    if (strcmp(property, "xdigit") == 0)
+        return 12;
+    return 0;
+}
+
+int iswctype(int c, unsigned long desc)
+{
+    switch (desc)
+    {
+    case 1:
+        return iswalnum(c);
+    case 2:
+        return iswalpha(c);
+    case 3:
+        return iswblank(c);
+    case 4:
+        return iswcntrl(c);
+    case 5:
+        return iswdigit(c);
+    case 6:
+        return iswgraph(c);
+    case 7:
+        return iswlower(c);
+    case 8:
+        return iswprint(c);
+    case 9:
+        return iswpunct(c);
+    case 10:
+        return iswspace(c);
+    case 11:
+        return iswupper(c);
+    case 12:
+        return iswxdigit(c);
+    default:
+        return 0;
+    }
 }
 
 char *strerror(int errnum)

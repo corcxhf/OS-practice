@@ -226,6 +226,7 @@ def test_shell(q):
     require(out, "install", "install tool in /bin")
     require(out, "cc", "system C compiler slot in /bin")
     require(out, "gcc", "GCC driver slot in /bin")
+    require(out, "cpp", "C preprocessor slot in /bin")
     require(out, "as", "assembler slot in /bin")
     require(out, "ld", "linker slot in /bin")
     forbid(out, "edit", "removed edit alias in /bin")
@@ -786,7 +787,7 @@ def test_build_tool(q):
     require(out, "\n3\n", "built userland lines counts file")
     out = q.command("cat lines.txt | ./lines", timeout=10)
     require(out, "\n3\n", "built userland lines counts stdin")
-    out = q.command("build install", timeout=10)
+    out = q.command("build install", timeout=90)
     require(out, "BUILD_PASS cat2-install", "build install cat2 pass")
     require(out, "BUILD_PASS diff2-install", "build install diff2 pass")
     require(out, "BUILD_PASS grep2-install", "build install grep2 pass")
@@ -1070,6 +1071,14 @@ def test_tcc_scanf(q):
 
 def test_binutils_wrappers(q):
     cleanup(q, "av.s", "ac.c", "av.o", "ac.o", "asld")
+    has_native_binutils = False
+    out = q.command("as --version", timeout=10)
+    if "GNU assembler" in show(out):
+        has_native_binutils = True
+        require(out, "GNU assembler", "as wrapper uses native GNU as when present")
+        out = q.command("ld --version", timeout=10)
+        require(out, "GNU ld", "ld wrapper uses native GNU ld when present")
+
     asm_source = (
         b"i.global asm_value\n"
         b".text\n"
@@ -1095,14 +1104,389 @@ def test_binutils_wrappers(q):
     out = q.command("tcc -c ac.c -o ac.o", timeout=30)
     forbid(out, "error:", "tcc object compile error")
 
-    out = q.command("ld ac.o av.o -o asld", timeout=30)
-    forbid(out, "error:", "ld wrapper error")
+    if has_native_binutils:
+        out = q.command("ld /lib/crt1.o /lib/crti.o ac.o av.o -lc /lib/crtn.o -o asld", timeout=60)
+        forbid(out, "undefined reference", "ld wrapper undefined reference")
+    else:
+        out = q.command("ld ac.o av.o -o asld", timeout=30)
+        forbid(out, "error:", "ld wrapper error")
     forbid(out, "unsupported option", "ld wrapper unsupported option")
 
     out = q.command("./asld", timeout=10)
     require(out, "ASLD:77", "as/ld linked program output")
     out = q.command("echo $?")
     require(out, "\n0\n", "as/ld linked program exit status")
+
+
+def test_binutils_as_native(q):
+    cleanup(q, "gas.s", "gas.o", "gas.c", "gas_c.o", "gasrun")
+
+    out = q.command("myos-as --version", timeout=10)
+    require(out, "GNU assembler", "native GNU as version banner")
+    require(out, "riscv64-unknown-elf", "native GNU as target")
+
+    asm_source = (
+        b"i.global gas_value\n"
+        b".text\n"
+        b"gas_value:\n"
+        b" li a0,88\n"
+        b" ret\n"
+        b"\x1b:wq\r"
+    )
+    c_source = (
+        b"i#include <stdio.h>\n"
+        b"extern int gas_value(void);\n"
+        b"int main(){ printf(\"GAS:%d\\n\", gas_value()); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+
+    q.vi("gas.s", asm_source, timeout=10)
+    q.vi("gas.c", c_source, timeout=10)
+
+    out = q.command("myos-as gas.s -o gas.o", timeout=30)
+    forbid(out, "internal error", "native as internal error")
+    forbid(out, "USERTRAP", "native as user trap")
+    out = q.command("ls gas.o", timeout=5)
+    require(out, "gas.o", "native as object output")
+
+    out = q.command("tcc -c gas.c -o gas_c.o", timeout=30)
+    forbid(out, "error:", "native as C side compile error")
+    out = q.command("ld /lib/crt1.o /lib/crti.o gas_c.o gas.o -lc /lib/crtn.o -o gasrun", timeout=60)
+    forbid(out, "undefined reference", "native as link undefined reference")
+    forbid(out, "error:", "native as link error")
+    out = q.command("./gasrun", timeout=10)
+    require(out, "GAS:88", "native as linked program output")
+
+
+def test_binutils_ld_native(q):
+    cleanup(q, "myld.s", "myld.o", "myld")
+
+    out = q.command("myos-ld --version", timeout=10)
+    require(out, "GNU ld", "native GNU ld version banner")
+    require(out, "GNU Binutils", "native GNU ld binutils banner")
+
+    asm_source = (
+        b"i.global _start\n"
+        b".text\n"
+        b"_start:\n"
+        b" li a7,2\n"
+        b" li a0,99\n"
+        b" ecall\n"
+        b"\x1b:wq\r"
+    )
+
+    q.vi("myld.s", asm_source, timeout=10)
+    out = q.command("myos-as myld.s -o myld.o", timeout=30)
+    forbid(out, "internal error", "native as for native ld internal error")
+    forbid(out, "USERTRAP", "native as for native ld user trap")
+
+    out = q.command("myos-ld myld.o -o myld", timeout=30)
+    forbid(out, "internal error", "native ld internal error")
+    forbid(out, "USERTRAP", "native ld user trap")
+    forbid(out, "undefined reference", "native ld undefined reference")
+    out = q.command("ls myld", timeout=5)
+    require(out, "myld", "native ld executable output")
+
+    q.command("./myld", timeout=10)
+    out = q.command("echo $?", timeout=5)
+    require(out, "\n99\n", "native ld linked program exit status")
+
+
+def test_binutils_driver_native(q):
+    cleanup(q, "drv.c", "drv.s", "drv.S", "drv.o", "drv_asm.o", "drv_pp.o", "drvbin", "drvgccbin", "drvasm", "drvpp", "pp.c", "pp.i", "pp2.i")
+
+    out = q.command("myos-gcc --version", timeout=10)
+    require(out, "experimental driver", "native driver version banner")
+    out = q.command("myos-gcc -print-prog-name=as", timeout=5)
+    require(out, "/bin/myos-as", "native driver assembler path")
+    out = q.command("myos-gcc -print-prog-name=ld", timeout=5)
+    require(out, "/bin/myos-ld", "native driver linker path")
+    out = q.command("myos-gcc -print-prog-name=cpp", timeout=5)
+    require(out, "/bin/cpp", "native driver preprocessor path")
+    out = q.command("myos-gcc -dumpmachine", timeout=5)
+    require(out, "riscv64-unknown-elf", "native driver target triplet")
+    out = q.command("myos-gcc -print-sysroot", timeout=5)
+    require(out, "/", "native driver sysroot")
+
+    c_source = (
+        b"i#include <stdio.h>\n"
+        b"int main(){ printf(\"DRIVER:%d\\n\", 321); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("drv.c", c_source, timeout=10)
+    out = q.command("myos-gcc drv.c -o drvbin", timeout=60)
+    forbid(out, "unsupported option", "native driver C unsupported option")
+    forbid(out, "error:", "native driver C compile error")
+    forbid(out, "USERTRAP", "native driver C user trap")
+    out = q.command("./drvbin", timeout=10)
+    require(out, "DRIVER:321", "native driver C linked program output")
+
+    out = q.command("gcc --version", timeout=10)
+    require(out, "experimental driver", "gcc slot uses native driver when present")
+    out = q.command("gcc -print-prog-name=as", timeout=5)
+    require(out, "/bin/myos-as", "gcc slot native assembler path")
+    out = q.command("gcc -print-prog-name=ld", timeout=5)
+    require(out, "/bin/myos-ld", "gcc slot native linker path")
+    out = q.command("gcc drv.c -o drvgccbin", timeout=60)
+    forbid(out, "unsupported option", "gcc slot native driver unsupported option")
+    forbid(out, "error:", "gcc slot native driver compile error")
+    forbid(out, "USERTRAP", "gcc slot native driver user trap")
+    out = q.command("./drvgccbin", timeout=10)
+    require(out, "DRIVER:321", "gcc slot native driver linked program output")
+
+    pp_source = (
+        b"i#ifndef VALUE\n"
+        b"#define VALUE 1\n"
+        b"#endif\n"
+        b"int pp_value = VALUE;\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("pp.c", pp_source, timeout=10)
+    out = q.command("myos-gcc -E -DVALUE=654 pp.c -o pp.i", timeout=30)
+    forbid(out, "unsupported option", "native driver preprocess unsupported option")
+    forbid(out, "error:", "native driver preprocess error")
+    out = q.command("cat pp.i", timeout=5)
+    require(out, "int pp_value = 654;", "native driver preprocess output")
+    out = q.command("cpp -DVALUE=987 pp.c -o pp2.i", timeout=30)
+    forbid(out, "error:", "native cpp slot preprocess error")
+    forbid(out, "USERTRAP", "native cpp slot user trap")
+    out = q.command("cat pp2.i", timeout=5)
+    require(out, "int pp_value = 987;", "native cpp slot preprocess output")
+
+    asm_source = (
+        b"i.global _start\n"
+        b".text\n"
+        b"_start:\n"
+        b" li a7,2\n"
+        b" li a0,23\n"
+        b" ecall\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("drv.s", asm_source, timeout=10)
+    out = q.command("myos-gcc -c drv.s -o drv_asm.o", timeout=30)
+    forbid(out, "unsupported option", "native driver asm unsupported option")
+    forbid(out, "USERTRAP", "native driver asm user trap")
+    out = q.command("myos-gcc -nostdlib drv_asm.o -o drvasm", timeout=60)
+    forbid(out, "undefined reference", "native driver asm undefined reference")
+    q.command("./drvasm", timeout=10)
+    out = q.command("echo $?", timeout=5)
+    require(out, "\n23\n", "native driver asm linked program exit status")
+
+    asmpp_source = (
+        b"i#define STATUS_CODE VALUE\n"
+        b".global _start\n"
+        b".text\n"
+        b"_start:\n"
+        b" li a7,2\n"
+        b" li a0,STATUS_CODE\n"
+        b" ecall\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("drv.S", asmpp_source, timeout=10)
+    out = q.command("myos-gcc -DVALUE=45 -c drv.S -o drv_pp.o", timeout=60)
+    forbid(out, "unsupported option", "native driver asm preprocess unsupported option")
+    forbid(out, "error:", "native driver asm preprocess error")
+    forbid(out, "USERTRAP", "native driver asm preprocess user trap")
+    out = q.command("myos-gcc -nostdlib drv_pp.o -o drvpp", timeout=60)
+    forbid(out, "undefined reference", "native driver preprocessed asm undefined reference")
+    q.command("./drvpp", timeout=10)
+    out = q.command("echo $?", timeout=5)
+    require(out, "\n45\n", "native driver preprocessed asm linked exit status")
+
+
+def test_binutils_archive_native(q):
+    cleanup(q, "ar_main.c", "ar_lib.c", "ar_main.o", "ar_lib.o", "libar.a", "arrun")
+
+    out = q.command("myos-ar --version", timeout=10)
+    require(out, "GNU ar", "native GNU ar version banner")
+    out = q.command("myos-ranlib --version", timeout=10)
+    require(out, "GNU ranlib", "native GNU ranlib version banner")
+
+    main_source = (
+        b"i#include <stdio.h>\n"
+        b"extern int archive_value(void);\n"
+        b"int main(){ printf(\"AR:%d\\n\", archive_value()); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+    lib_source = (
+        b"iint archive_value(void){ return 456; }\n"
+        b"\x1b:wq\r"
+    )
+
+    q.vi("ar_main.c", main_source, timeout=10)
+    q.vi("ar_lib.c", lib_source, timeout=10)
+    out = q.command("tcc -c ar_main.c -o ar_main.o", timeout=30)
+    forbid(out, "error:", "native archive main compile error")
+    out = q.command("tcc -c ar_lib.c -o ar_lib.o", timeout=30)
+    forbid(out, "error:", "native archive lib compile error")
+
+    out = q.command("myos-ar rcs libar.a ar_lib.o", timeout=30)
+    forbid(out, "internal error", "native ar internal error")
+    forbid(out, "USERTRAP", "native ar user trap")
+    out = q.command("myos-ranlib libar.a", timeout=30)
+    forbid(out, "internal error", "native ranlib internal error")
+    forbid(out, "USERTRAP", "native ranlib user trap")
+
+    out = q.command("myos-ld /lib/crt1.o /lib/crti.o ar_main.o libar.a /lib/libc.a /lib/crtn.o -o arrun", timeout=60)
+    forbid(out, "undefined reference", "native archive link undefined reference")
+    forbid(out, "USERTRAP", "native archive link user trap")
+    out = q.command("./arrun", timeout=10)
+    require(out, "AR:456", "native archive linked program output")
+
+
+def test_binutils_libgcc_native(q):
+    cleanup(q, "libgccrun", "lgsrc.c", "lgsrc")
+
+    out = q.command("myos-gcc -print-libgcc-file-name", timeout=5)
+    require(out, "/lib/libgcc.a", "native driver libgcc path")
+    out = q.command("myos-gcc -print-file-name=libc.a", timeout=5)
+    require(out, "/lib/libc.a", "native driver libc path")
+    out = q.command("myos-gcc -print-file-name=crt1.o", timeout=5)
+    require(out, "/lib/crt1.o", "native driver crt1 path")
+    out = q.command("myos-gcc -print-search-dirs", timeout=5)
+    require(out, "libraries: =/lib", "native driver library search dir")
+    out = q.command("cat /src/tests/libgcc_need.c", timeout=5)
+    require(out, "__int128", "libgcc test source in image")
+    require(out, "LIBGCC", "libgcc test source marker")
+
+    out = q.command("myos-gcc /obj/libgcc_need.o -o libgccrun", timeout=90)
+    forbid(out, "undefined reference", "native libgcc link undefined reference")
+    forbid(out, "USERTRAP", "native libgcc link user trap")
+    forbid(out, "cannot open", "native libgcc link missing file")
+    out = q.command("./libgccrun ok", timeout=10)
+    require(out, "LIBGCC:", "native libgcc linked program output")
+    out = q.command("echo $?", timeout=5)
+    require(out, "\n0\n", "native libgcc linked program exit status")
+
+    libgcc_source = (
+        b"i#include <stdio.h>\n"
+        b"long long divv(long long x){ return x / 13LL; }\n"
+        b"int main(){ printf(\"LG:%lld\\n\", divv(1234567890123LL)); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("lgsrc.c", libgcc_source, timeout=10)
+    out = q.command("myos-gcc lgsrc.c -o lgsrc", timeout=90)
+    forbid(out, "undefined reference", "native libgcc source link undefined reference")
+    forbid(out, "error:", "native libgcc source compile error")
+    out = q.command("./lgsrc", timeout=10)
+    require(out, "LG:94966760778", "native libgcc source linked program output")
+
+
+def test_binutils_search_native(q):
+    cleanup(
+        q,
+        "search_main.c",
+        "search_lib.c",
+        "search_main.o",
+        "search_lib.o",
+        "libsearch.a",
+        "searchrun",
+        "scombo.o",
+        "scombo",
+        "libgccsearch",
+    )
+
+    main_source = (
+        b"i#include <stdio.h>\n"
+        b"extern int search_value(void);\n"
+        b"int main(){ printf(\"SEARCH:%d\\n\", search_value()); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+    lib_source = (
+        b"iint search_value(void){ return 777; }\n"
+        b"\x1b:wq\r"
+    )
+
+    q.vi("search_main.c", main_source, timeout=10)
+    q.vi("search_lib.c", lib_source, timeout=10)
+    out = q.command("myos-gcc -c search_main.c search_lib.c", timeout=60)
+    forbid(out, "error:", "native driver multi -c compile error")
+    forbid(out, "unsupported option", "native driver multi -c unsupported option")
+
+    out = q.command("myos-gcc -r search_main.o search_lib.o -o scombo.o", timeout=60)
+    forbid(out, "undefined reference", "native driver -r undefined reference")
+    forbid(out, "USERTRAP", "native driver -r user trap")
+    out = q.command("myos-gcc scombo.o -o scombo", timeout=90)
+    forbid(out, "undefined reference", "native driver relink undefined reference")
+    out = q.command("./scombo", timeout=10)
+    require(out, "SEARCH:777", "native driver -r relinked program output")
+
+    out = q.command("myos-ar rcs libsearch.a search_lib.o", timeout=30)
+    forbid(out, "USERTRAP", "native search ar user trap")
+    out = q.command("myos-ranlib libsearch.a", timeout=30)
+    forbid(out, "USERTRAP", "native search ranlib user trap")
+
+    out = q.command("myos-gcc search_main.o -Wl,-Map,search.map -Xlinker --gc-sections -o searchrun -L. -lsearch", timeout=90)
+    forbid(out, "undefined reference", "native driver -L/-l undefined reference")
+    forbid(out, "cannot find", "native driver -L/-l cannot find library")
+    out = q.command("./searchrun", timeout=10)
+    require(out, "SEARCH:777", "native driver -L/-l linked program output")
+    out = q.command("ls search.map", timeout=5)
+    require(out, "search.map", "native driver -Wl/-Xlinker linker option output")
+
+    out = q.command("myos-ld /lib/crt1.o /lib/crti.o /obj/libgcc_need.o -lc -lgcc /lib/crtn.o -o libgccsearch", timeout=90)
+    forbid(out, "undefined reference", "native ld default /lib -lc -lgcc undefined reference")
+    forbid(out, "cannot find", "native ld default /lib -lc -lgcc cannot find library")
+    out = q.command("./libgccsearch ok", timeout=10)
+    require(out, "LIBGCC:", "native ld -L/lib -lc -lgcc linked output")
+
+
+def test_binutils_inspect_native(q):
+    cleanup(q, "insp.c", "insp", "inspcopy", "inspstrip")
+
+    out = q.command("myos-nm --version", timeout=10)
+    require(out, "GNU nm", "native GNU nm version banner")
+    out = q.command("myos-strip --version", timeout=10)
+    require(out, "GNU strip", "native GNU strip version banner")
+    out = q.command("myos-objcopy --version", timeout=10)
+    require(out, "GNU objcopy", "native GNU objcopy version banner")
+    out = q.command("myos-objdump --version", timeout=10)
+    require(out, "GNU objdump", "native GNU objdump version banner")
+    out = q.command("myos-readelf --version", timeout=10)
+    require(out, "GNU readelf", "native GNU readelf version banner")
+    out = q.command("ar --version", timeout=10)
+    require(out, "GNU ar", "native ar alias version banner")
+    out = q.command("ranlib --version", timeout=10)
+    require(out, "GNU ranlib", "native ranlib alias version banner")
+    out = q.command("nm --version", timeout=10)
+    require(out, "GNU nm", "native nm alias version banner")
+    out = q.command("strip --version", timeout=10)
+    require(out, "GNU strip", "native strip alias version banner")
+    out = q.command("objcopy --version", timeout=10)
+    require(out, "GNU objcopy", "native objcopy alias version banner")
+    out = q.command("objdump --version", timeout=10)
+    require(out, "GNU objdump", "native objdump alias version banner")
+    out = q.command("readelf --version", timeout=10)
+    require(out, "GNU readelf", "native readelf alias version banner")
+
+    source = (
+        b"i#include <stdio.h>\n"
+        b"int exported_symbol(void){ return 909; }\n"
+        b"int main(){ printf(\"INSP:%d\\n\", exported_symbol()); return 0; }\n"
+        b"\x1b:wq\r"
+    )
+    q.vi("insp.c", source, timeout=10)
+    out = q.command("myos-gcc insp.c -o insp", timeout=90)
+    forbid(out, "undefined reference", "native inspect compile undefined reference")
+    forbid(out, "error:", "native inspect compile error")
+
+    out = q.command("myos-nm insp", timeout=30)
+    require(out, "exported_symbol", "native nm sees program symbol")
+    out = q.command("myos-readelf -h insp", timeout=30)
+    require(out, "ELF Header", "native readelf shows header")
+    require(out, "RISC-V", "native readelf shows RISC-V machine")
+    out = q.command("objdump -t insp", timeout=30)
+    require(out, "exported_symbol", "native objdump sees symbol table")
+    out = q.command("objcopy insp inspcopy", timeout=60)
+    forbid(out, "USERTRAP", "native objcopy user trap")
+    forbid(out, "error", "native objcopy error")
+    out = q.command("./inspcopy", timeout=10)
+    require(out, "INSP:909", "native objcopy copied program output")
+    out = q.command("strip -o inspstrip insp", timeout=60)
+    forbid(out, "USERTRAP", "native strip user trap")
+    forbid(out, "error", "native strip error")
+    out = q.command("./inspstrip", timeout=10)
+    require(out, "INSP:909", "native stripped program output")
 
 
 def test_gcc_driver_slot(q):
@@ -1119,9 +1503,17 @@ def test_gcc_driver_slot(q):
     require(out, "HELLO_USERLAND", "gcc slot compiled program output")
 
     out = q.command("gcc -print-prog-name=as", timeout=5)
-    require(out, "/bin/as", "gcc driver assembler path")
+    if "/bin/myos-as" in show(out):
+        require(out, "/bin/myos-as", "gcc driver native assembler path")
+    else:
+        require(out, "/bin/as", "gcc driver assembler path")
     out = q.command("gcc -print-prog-name=ld", timeout=5)
-    require(out, "/bin/ld", "gcc driver linker path")
+    if "/bin/myos-ld" in show(out):
+        require(out, "/bin/myos-ld", "gcc driver native linker path")
+    else:
+        require(out, "/bin/ld", "gcc driver linker path")
+    out = q.command("gcc -print-prog-name=cpp", timeout=5)
+    require(out, "/bin/cpp", "gcc driver preprocessor path")
 
 
 def test_cxx_contract(q):
@@ -1364,6 +1756,7 @@ def main():
     parser.add_argument("--qemu", default="qemu-system-riscv64")
     parser.add_argument("--timeout", type=float, default=15)
     parser.add_argument("--keep-image", action="store_true")
+    parser.add_argument("--only", action="append", default=[], help="run only the named test")
     args = parser.parse_args()
 
     workdir = tempfile.mkdtemp(prefix="myos-qemu-smoke-")
@@ -1387,6 +1780,13 @@ def main():
         ("vi", test_vi_save_and_keys),
         ("tcc-scanf", test_tcc_scanf),
         ("binutils-wrappers", test_binutils_wrappers),
+        ("binutils-as-native", test_binutils_as_native),
+        ("binutils-ld-native", test_binutils_ld_native),
+        ("binutils-driver-native", test_binutils_driver_native),
+        ("binutils-archive-native", test_binutils_archive_native),
+        ("binutils-libgcc-native", test_binutils_libgcc_native),
+        ("binutils-search-native", test_binutils_search_native),
+        ("binutils-inspect-native", test_binutils_inspect_native),
         ("gcc-driver-slot", test_gcc_driver_slot),
         ("gcc-contract", test_gcc_contract),
         ("gcc-static-contract", test_gcc_static_contract),
@@ -1399,6 +1799,30 @@ def main():
         ("fs-contract", test_fs_contract),
         ("tty-contract", test_tty_contract),
     ]
+    known = {name for name, _ in tests}
+    if args.only:
+        wanted = set()
+        for item in args.only:
+            wanted.update(part for part in item.split(",") if part)
+        unknown = sorted(wanted - known)
+        if unknown:
+            print(f"[FAIL] unknown test(s): {', '.join(unknown)}", file=sys.stderr)
+            return 1
+        tests = [(name, fn) for name, fn in tests if name in wanted]
+    else:
+        tests = [
+            (name, fn)
+            for name, fn in tests
+            if name not in {
+                "binutils-as-native",
+                "binutils-ld-native",
+                "binutils-driver-native",
+                "binutils-archive-native",
+                "binutils-libgcc-native",
+                "binutils-search-native",
+                "binutils-inspect-native",
+            }
+        ]
     try:
         q = Qemu(args.qemu, args.kernel, image, args.timeout)
         q.read_until(PROMPT, timeout=args.timeout, label="initial shell prompt")

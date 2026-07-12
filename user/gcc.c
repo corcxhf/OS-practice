@@ -58,10 +58,19 @@ static void usage(void)
 
 void main(int argc, char *argv[], char *envp[])
 {
+    char *myos_argv[MAX_TOOL_ARGS];
     char *cc_argv[MAX_TOOL_ARGS];
     int out_argc = 0;
     int user_argc = 0;
 
+    if (append_arg(myos_argv, &out_argc, "/bin/myos-gcc") < 0)
+        usage();
+    for (int i = 1; i < argc; i++)
+        if (append_arg(myos_argv, &out_argc, argv[i]) < 0)
+            usage();
+    syscall(SYS_exec, (uint64)"/bin/myos-gcc", (uint64)myos_argv, (uint64)envp);
+
+    out_argc = 0;
     if (append_arg(cc_argv, &out_argc, "/bin/cc") < 0)
         usage();
 
@@ -80,6 +89,11 @@ void main(int argc, char *argv[], char *envp[])
         if (str_eq(argv[i], "-print-prog-name=ld"))
         {
             write_str(STDOUT_FD, "/bin/ld\n");
+            syscall(SYS_exit, 0, 0, 0);
+        }
+        if (str_eq(argv[i], "-print-prog-name=cpp"))
+        {
+            write_str(STDOUT_FD, "/bin/cpp\n");
             syscall(SYS_exit, 0, 0, 0);
         }
         user_argc++;

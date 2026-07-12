@@ -3,6 +3,11 @@
 
 #include <stddef.h>
 
+#define EXIT_SUCCESS 0
+#define EXIT_FAILURE 1
+#define RAND_MAX 32767
+#define MB_CUR_MAX 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,8 +19,18 @@ void *calloc(size_t nmemb, size_t size);
 void *realloc(void *ptr, size_t size);
 void abort(void);
 int atoi(const char *s);
+long atol(const char *s);
+long long atoll(const char *s);
+int abs(int x);
+long labs(long x);
 long strtol(const char *nptr, char **endptr, int base);
 unsigned long strtoul(const char *nptr, char **endptr, int base);
+long long strtoll(const char *nptr, char **endptr, int base);
+unsigned long long strtoull(const char *nptr, char **endptr, int base);
+double strtod(const char *nptr, char **endptr);
+float strtof(const char *nptr, char **endptr);
+long double strtold(const char *nptr, char **endptr);
+double atof(const char *nptr);
 char *getenv(const char *name);
 int setenv(const char *name, const char *value, int overwrite);
 int unsetenv(const char *name);
@@ -28,6 +43,8 @@ void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, co
 int atexit(void (*function)(void));
 long sysconf(int name);
 int getpagesize(void);
+int rand(void);
+void srand(unsigned int seed);
 
 extern char **environ;
 

@@ -80,11 +80,20 @@ static void usage(void)
 
 void main(int argc, char *argv[], char *envp[])
 {
+    char *gnu_argv[MAX_TOOL_ARGS];
     char *tcc_argv[MAX_TOOL_ARGS];
     char *input = 0;
     char *output = 0;
     int out_argc = 0;
 
+    if (append_arg(gnu_argv, &out_argc, "/bin/myos-as") < 0)
+        usage();
+    for (int i = 1; i < argc; i++)
+        if (append_arg(gnu_argv, &out_argc, argv[i]) < 0)
+            usage();
+    syscall(SYS_exec, (uint64)"/bin/myos-as", (uint64)gnu_argv, (uint64)envp);
+
+    out_argc = 0;
     append_arg(tcc_argv, &out_argc, "/bin/tcc");
     append_arg(tcc_argv, &out_argc, "-c");
 

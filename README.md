@@ -65,7 +65,7 @@ Ctrl-a x
 运行自动回归测试：
 
 ```sh
-make test-qemu
+make check
 ```
 
 如果开发时 `fs.img` 变旧或损坏，可以重新生成：
@@ -73,6 +73,16 @@ make test-qemu
 ```sh
 rm -f fs.img
 make fs.img
+```
+
+普通构建和测试不需要额外下载源码。TCC 已按固定上游版本放在
+`ports/tinycc/` 中，并包含 MyOS 所需的移植修改。
+
+包含原生 GNU binutils 移植的扩展测试需要联网下载固定版本的 binutils
+源码，并会花费更长时间：
+
+```sh
+make check-toolchain
 ```
 
 ## 在 MyOS 里能做什么
@@ -346,7 +356,7 @@ build/riscv64-myos-g++ tests/cxx_dyn_contract.cc -o build/cxxdyntest2
 主要测试入口：
 
 ```sh
-make test-qemu
+make check
 ```
 
 它会运行 [scripts/qemu_smoke.py](scripts/qemu_smoke.py)，启动 QEMU，复制一份临时 `fs.img`，驱动 shell，并检查系统行为。
@@ -417,7 +427,7 @@ OUROBOROS.md         长期自举路线图
 构建运行所需文件：
 
 ```sh
-make kernel.elf fs.img
+make
 ```
 
 运行：
@@ -429,7 +439,13 @@ make run
 测试：
 
 ```sh
-make test-qemu
+make check
+```
+
+包含 GNU binutils 移植的扩展测试：
+
+```sh
+make check-toolchain
 ```
 
 清理生成文件：

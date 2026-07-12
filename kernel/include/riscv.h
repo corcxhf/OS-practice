@@ -61,6 +61,10 @@ static inline void w_mepc(uint64 x)
 #define SSTATUS_UPIE (1L << 4)
 #define SSTATUS_SIE (1L << 1) /* S态全局中断使能位（当前是否允许中断）*/
 #define SSTATUS_UIE (1L << 0)
+#define SSTATUS_FS_MASK (3L << 13)
+#define SSTATUS_FS_INITIAL (1L << 13)
+#define SSTATUS_FS_CLEAN (2L << 13)
+#define SSTATUS_FS_DIRTY (3L << 13)
 
 #define SSTATUS_SUM (1L << 18)
 
